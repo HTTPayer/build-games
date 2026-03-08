@@ -1,0 +1,23 @@
+{
+  "name": "servers",
+  "version": "1.0.0",
+  "main": "index.js",
+  "type": "module",
+  "scripts": {
+    "dev": "tsx src/server.ts",
+    "client": "tsx src/client.ts"
+  },
+  "author": "",
+  "license": "ISC",
+  "description": "",
+  "dependencies": {
+    "@x402/core": "^2.6.0",
+    "@x402/evm": "^2.6.0",
+    "@x402/express": "^2.6.0",
+    "@x402/fetch": "^2.6.0",
+    "dotenv": "^17.3.1"
+  },
+  "devDependencies": {
+    "tsx": "^4.21.0"
+  }
+}

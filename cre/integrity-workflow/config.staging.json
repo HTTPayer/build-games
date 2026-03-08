@@ -1,0 +1,5 @@
+{
+  "challengeManagerAddress": "0x60825231973f0e9d441a85021daca8aae473a44b",
+  "chainSelectorName": "avalanche-testnet-fuji",
+  "gasLimit": "500000"
+}

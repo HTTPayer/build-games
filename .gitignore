@@ -1,0 +1,95 @@
+# =============================================================================
+# SECRETS — never commit real credentials
+# =============================================================================
+
+# All .env files are secret by default
+.env
+.env.*
+
+# Allow sample / example templates
+!.env.sample
+!.env.example
+!**/.env.sample
+!**/.env.example
+
+# Explicit key/cert files
+*.pem
+*.key
+*.p12
+*.pfx
+secrets.json
+credentials.json
+
+# =============================================================================
+# FOUNDRY (contracts/)
+# =============================================================================
+
+contracts/out/
+contracts/cache/
+
+# Keep the latest live broadcast (used as address source of truth by scripts)
+contracts/broadcast/
+!contracts/broadcast/
+!contracts/broadcast/DeployAll.s.sol/
+!contracts/broadcast/DeployAll.s.sol/43113/
+!contracts/broadcast/DeployAll.s.sol/43113/run-latest.json
+
+# Drop local anvil + dry-run artifacts
+contracts/broadcast/*/31337/
+contracts/broadcast/**/dry-run/
+
+# Foundry dependencies (installed via forge install / submodules)
+contracts/lib/
+
+# =============================================================================
+# PYTHON (contracts/scripts/)
+# =============================================================================
+
+**/.venv/
+**/__pycache__/
+*.pyc
+*.pyo
+*.egg-info/
+.python-version
+
+# Watcher runtime state (block cursors, processed IDs — env-specific)
+contracts/scripts/cre_watcher_state.json
+contracts/scripts/challenger_watcher_state.json
+
+# =============================================================================
+# NODE / TYPESCRIPT
+# =============================================================================
+
+**/node_modules/
+**/dist/
+**/*.tsbuildinfo
+
+# =============================================================================
+# CRE workflow temp artifacts
+# =============================================================================
+
+cre/integrity-workflow/.workflow-temp-*.ts
+cre/integrity-workflow/tmp.js
+cre/integrity-workflow/tmp.wasm
+
+# =============================================================================
+# OS / EDITOR
+# =============================================================================
+
+.DS_Store
+Thumbs.db
+desktop.ini
+*.log
+*.swp
+*.swo
+.idea/
+.vscode/
+*.suo
+*.user
+
+# =============================================================================
+# MISC
+# =============================================================================
+
+notes.txt
+**/notes.txt
