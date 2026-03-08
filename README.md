@@ -42,7 +42,8 @@ The protocol is built in three composable layers. Each layer is independently us
 │  Stablecoins · Futures · Index · IAO · CDP                          │
 ├─────────────────────────────────────────────────────────────────────┤
 │  LAYER 1 — Revenue Tokenization                                     │
-│  ProviderRevenueVault (ERC4626) · ProviderRevenueSplitter           │
+│  ProviderRevenueVault (ERC4626) · ProviderRevenueShare (royalty)    │
+│  ProviderRevenueSplitter                                            │
 ├─────────────────────────────────────────────────────────────────────┤
 │  LAYER 0 — Infrastructure & Enforcement                             │
 │  APIIntegrityRegistry · StakeManager · ChallengeManager             │
@@ -86,28 +87,43 @@ result=0 (Invalid): provider slashed, challenger refunded + slash share
 
 ## Layer 1 — Revenue Tokenization
 
-The core primitive. Every x402 payment flows through the splitter and directly into the vault as a USDC transfer — increasing `totalAssets()` without minting new shares. Existing share holders earn yield purely through share price appreciation.
+The core primitive. Every x402 payment flows through the splitter into one or both tokenized revenue instruments. The provider chooses the split at deployment — it cannot be changed afterward.
 
 | Contract | Description |
 |---|---|
-| `ProviderRevenueVault` | ERC4626 vault. Fixed share supply after genesis mint. Revenue arrives via direct USDC transfer, so share price rises with every API call settled onchain. |
-| `ProviderRevenueSplitter` | Routes x402 USDC revenue across three recipients: protocol treasury, optional provider treasury (operating income), and the vault (share appreciation). All splits are immutable after deployment. |
+| `ProviderRevenueVault` | ERC4626 vault. Fixed share supply after genesis mint. Revenue arrives via direct USDC transfer, increasing `totalAssets()` without minting new shares — share price rises with every API call. To exit, holders redeem shares for USDC. |
+| `ProviderRevenueShare` | Fixed-supply ERC20 royalty token. Represents a perpetual, proportional claim on all future revenue paid as USDC dividends. Holders call `claim()` to collect — shares are never burned. To exit, holders sell on a secondary market. Price reflects expected *future* revenue. |
+| `ProviderRevenueSplitter` | Routes x402 USDC across: protocol treasury, optional provider treasury (direct operating income), optional revenue share contract, and the vault. All splits immutable after deployment. |
+
+### Two instruments, two investment models
+
+```
+ProviderRevenueVault   — ERC4626, price appreciation model
+                         share price = totalAssets / totalSupply
+                         yield realised on redeem
+
+ProviderRevenueShare   — ERC20 royalty trust model
+                         revenuePerShare accumulator, claim() anytime
+                         shares never burned — sell to exit
+                         market price reflects future revenue expectations
+```
+
+Both can be deployed simultaneously. The provider sets `vaultBp` and `revenueShareBp` at deploy time — the splitter routes accordingly.
 
 ### Revenue split
 
 ```
-protocolTreasuryBp   →  protocol treasury  (USDC)         [fixed by protocol]
-providerTreasuryBp   →  provider treasury  (USDC, opt.)   [set at deployment]
-vaultBp              →  vault direct transfer              [remainder]
+protocolTreasuryBp   →  protocol treasury      (USDC)   [fixed by protocol]
+providerTreasuryBp   →  provider treasury      (USDC)   [optional direct income]
+revenueShareBp       →  ProviderRevenueShare   (USDC dividends to holders)
+vaultBp              →  ProviderRevenueVault   (share price appreciation)
 ```
 
-`vaultBp = 10,000 - protocolTreasuryBp - providerTreasuryBp`
-
-Setting `providerTreasuryBp = 0` routes all non-protocol revenue to vault share appreciation. Setting it higher gives the developer direct USDC operating income. The developer decides at deployment — it cannot be changed afterward.
+`vaultBp = 10,000 − protocolTreasuryBp − providerTreasuryBp − revenueShareBp`
 
 ### Genesis mint
 
-Vault shares are minted once at factory deployment with no USDC backing. The `genesisRecipient` can be any address: developer wallet, multisig, IAO contract, vesting contract. Share price starts at `0` and rises with API usage.
+Both contracts mint a fixed supply once at factory deployment with no USDC backing. The `genesisRecipient` can be any address: developer wallet, multisig, IAO contract, vesting contract. Share price / revenue-per-share both start at `0` and grow with API usage.
 
 ---
 
