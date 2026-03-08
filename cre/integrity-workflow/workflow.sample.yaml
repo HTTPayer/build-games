@@ -1,0 +1,20 @@
+# ==========================================================================
+# CRE WORKFLOW SETTINGS — integrity-workflow
+# Copy to workflow.yaml
+# ==========================================================================
+
+staging-settings:
+  user-workflow:
+    workflow-name: "integrity-workflow-staging"
+  workflow-artifacts:
+    workflow-path: "./main.ts"
+    config-path: "./config.staging.json"
+    secrets-path: ""
+
+production-settings:
+  user-workflow:
+    workflow-name: "integrity-workflow-production"
+  workflow-artifacts:
+    workflow-path: "./main.ts"
+    config-path: "./config.production.json"
+    secrets-path: ""
