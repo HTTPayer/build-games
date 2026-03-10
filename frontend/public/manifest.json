@@ -1,0 +1,18 @@
+{
+  "name": "Composed Protocol",
+  "short_name": "Composed",
+  "description": "Make API Revenue Investable — Onchain enforcement turns every API payment into a verifiable, tokenized financial instrument on Avalanche.",
+  "start_url": "/",
+  "display": "standalone",
+  "background_color": "#0a0a0a",
+  "theme_color": "#0a0a0a",
+  "orientation": "portrait-primary",
+  "categories": ["finance", "business"],
+  "icons": [
+    {
+      "src": "/icon",
+      "sizes": "32x32",
+      "type": "image/png"
+    }
+  ]
+}
