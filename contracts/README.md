@@ -1,4 +1,4 @@
-# API Integrity Protocol
+# Composed Protocol
 
 > **Permissionless adversarial verification protocol for API integrity on Avalanche**
 
@@ -8,7 +8,7 @@ Turn API revenue into investable, onchain assets with cryptoeconomic enforcement
 
 ## 🎯 What It Does
 
-The API Integrity Protocol enables:
+The Composed Protocol enables:
 
 1. **Verifiable API Revenue** - Every payment settles onchain via x402 protocol
 2. **Economic Enforcement** - Providers stake USDC; get slashed if they misdirect payments

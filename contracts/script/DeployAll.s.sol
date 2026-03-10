@@ -61,7 +61,7 @@ contract DeployAll is Script {
         // =====================================================================
 
         console.log("=================================================");
-        console.log("API Integrity Protocol - Full Deployment");
+        console.log("Composed Protocol - Full Deployment");
         console.log("=================================================");
         console.log("Admin:            ", admin);
         console.log("Treasury:         ", treasury);

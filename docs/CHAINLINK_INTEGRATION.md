@@ -2,7 +2,7 @@
 
 ## Overview
 
-The API Integrity Protocol uses **two Chainlink services**:
+The Composed Protocol uses **two Chainlink services**:
 
 1. **Chainlink Functions** - Offchain computation to verify endpoint integrity
 2. **Chainlink Automation** - Periodic automated challenges for continuous monitoring

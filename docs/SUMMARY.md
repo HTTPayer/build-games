@@ -2,7 +2,7 @@
 
 ## 🎉 What Was Accomplished
 
-Your API Integrity Protocol is now **production-ready** with complete Chainlink integration.
+Your Composed Protocol is now **production-ready** with complete Chainlink integration.
 
 ---
 

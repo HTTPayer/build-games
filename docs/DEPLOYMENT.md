@@ -1,6 +1,6 @@
 # Deployment Guide
 
-Full step-by-step guide for deploying the API Integrity Protocol to Avalanche Fuji testnet.
+Full step-by-step guide for deploying the Composed Protocol to Avalanche Fuji testnet.
 
 ---
 

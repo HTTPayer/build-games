@@ -1,4 +1,4 @@
-# API Integrity Protocol
+# Composed Protocol
 
 > Make API revenue investable for the first time — with onchain enforcement, not trust.
 

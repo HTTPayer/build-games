@@ -1,4 +1,23 @@
-# Composed Provider CLI
+# Composed Protocol CLI
+
+Interactive shell and one-shot CLI for provider operations on Avalanche Fuji.
+
+---
+
+## Prerequisites
+
+| Requirement | Notes |
+|---|---|
+| **Python 3.10+** | Check with `python --version` |
+| **uv** | Install: `pip install uv` or `curl -Lsf https://astral.sh/uv/install.sh \| sh` |
+| **Avalanche Fuji RPC** | Free endpoint: `https://api.avax-test.network/ext/bc/C/rpc` — or use an Alchemy/Infura Fuji URL for higher rate limits |
+| **Funded wallet** | You need testnet AVAX (for gas) and testnet USDC (for staking + challenge fees) on Fuji |
+| **Testnet AVAX** | Fuji faucet: https://faucet.avax.network/ |
+| **Testnet USDC** | Ask the admin to mint via `admin_cli.py mint-usdc` |
+
+---
+
+## Installation
 
 All commands run from `contracts/scripts/`:
 
@@ -6,14 +25,69 @@ All commands run from `contracts/scripts/`:
 cd contracts/scripts
 ```
 
-Requires a `.env` file in `contracts/scripts/` with:
+### 1. Install dependencies
+
+```bash
+uv sync
+```
+
+This installs all Python dependencies and registers the `composed` entry point in the local virtual environment.
+
+### 2. Create your `.env` file
+
+```bash
+cp .env.sample .env
+```
+
+Edit `.env` with your credentials:
 
 ```env
+# Required
 GATEWAY_URL=https://api.avax-test.network/ext/bc/C/rpc
 PRIVATE_KEY=0x...
-PROVIDER_PRIVATE_KEY=0x...   # optional, falls back to PRIVATE_KEY
-ETHERSCAN_API_KEY=...         # for contract verification on Snowscan
+
+# Optional — falls back to PRIVATE_KEY if not set
+PROVIDER_PRIVATE_KEY=0x...
+
+# Optional — for contract verification on Snowscan
+ETHERSCAN_API_KEY=...
 ```
+
+To use a different signer, update `PROVIDER_PRIVATE_KEY` in `.env` or pass it inline:
+
+```bash
+PROVIDER_PRIVATE_KEY=0x... composed status
+```
+
+### 3. Verify the installation
+
+```bash
+composed status
+```
+
+You should see your signer address, USDC balance, and current stake.
+
+---
+
+## Interactive shell
+
+Running `composed` with no arguments opens an interactive REPL:
+
+```bash
+composed
+```
+
+```
+Composed Protocol CLI  —  signer: 0xYourAddress
+Type a command or 'help'. Press Ctrl-C or type 'exit' to quit.
+
+composed> status
+composed> vault
+composed> splitter --distribute
+composed> exit
+```
+
+All commands below work identically in the shell and as one-shot CLI calls.
 
 ---
 
@@ -22,10 +96,10 @@ ETHERSCAN_API_KEY=...         # for contract verification on Snowscan
 ### 1. Check status
 
 ```bash
-uv run python cli.py status
+composed status
 ```
 
-Shows your signer address, USDC balance, current stake, and how many providers are deployed.
+Shows your signer address, USDC balance, current stake, and stats for all your deployed providers (vault TVL, share price, splitter balance, RS claimable).
 
 ---
 
@@ -34,7 +108,7 @@ Shows your signer address, USDC balance, current stake, and how many providers a
 The registry requires a minimum USDC stake before you can register as a provider. This command checks your current stake and automatically tops it up if needed.
 
 ```bash
-uv run python cli.py stake
+composed stake
 ```
 
 - If already staked to the minimum → prints `✓ stake sufficient` and exits
@@ -43,25 +117,25 @@ uv run python cli.py stake
 To unstake (starts a cooldown period):
 
 ```bash
-uv run python cli.py unstake
-uv run python cli.py unstake --amount 10000000   # partial unstake (raw USDC units)
+composed unstake
+composed unstake --amount 10000000   # partial unstake (raw USDC units)
 ```
 
 To withdraw after cooldown expires:
 
 ```bash
-uv run python cli.py withdraw
-uv run python cli.py withdraw --amount 10000000
+composed withdraw
+composed withdraw --amount 10000000
 ```
 
 ---
 
 ### 3. Deploy provider
 
-Deploys your revenue vault + splitter in a single transaction, registers you in the APIIntegrityRegistry, and submits the contracts for verification on Snowscan.
+Deploys your revenue vault + splitter in a single transaction, registers you in the registry, and submits the contracts for verification on Snowscan.
 
 ```bash
-uv run python cli.py deploy-provider \
+composed deploy-provider \
   --name   "Weather API Vault" \
   --symbol "wAPI" \
   --vault-bp 9800
@@ -113,7 +187,7 @@ uv run python cli.py deploy-provider \
   └─────────────────────────────────────────────────────────┘
 
   Then register your endpoints:
-  uv run python cli.py register-endpoint \
+  composed register-endpoint \
     --provider-id 1 --splitter 0xDEF... \
     --url <your-endpoint-url>
 ```
@@ -134,12 +208,24 @@ Redeploy or restart your server, then confirm it's live before continuing.
 
 ---
 
-### 5. Register endpoint
+### 5. Preview the integrity hash (optional)
 
-Fetches the x402 payment metadata from your live server, computes the integrity hash, and registers the endpoint on-chain. The `--splitter` flag is used to validate that the server's `payTo` matches — it will error before submitting if there's a mismatch.
+Before registering, verify what hash your live server will produce:
 
 ```bash
-uv run python cli.py register-endpoint \
+composed hash-endpoint --url http://your-server.com/weather
+```
+
+This fetches the x402 metadata from the server and prints the hash — no transaction sent.
+
+---
+
+### 6. Register endpoint
+
+Fetches the x402 payment metadata from your live server, computes the integrity hash, and registers the endpoint on-chain. The `--splitter` flag validates that the server's `payTo` matches — it will error before submitting if there's a mismatch.
+
+```bash
+composed register-endpoint \
   --provider-id 1 \
   --splitter    0xDEF... \
   --url         http://your-server.com/weather
@@ -161,7 +247,7 @@ ValueError: payTo mismatch — server has '0xOLD...' but expected '0xDEF...'.
 **To skip the live fetch** and provide a pre-computed hash directly:
 
 ```bash
-uv run python cli.py register-endpoint \
+composed register-endpoint \
   --provider-id 1 \
   --splitter    0xDEF... \
   --url         http://your-server.com/weather \
@@ -176,19 +262,16 @@ uv run python cli.py register-endpoint \
 
 ---
 
-### 6. Update endpoint hash
+### 7. Update endpoint hash
 
 When you change your x402 payment terms (e.g. new price), the on-chain integrity hash needs to match. This bumps the hash and increments the endpoint version.
 
 ```bash
 # Re-fetch from the live server automatically
-uv run python cli.py update-endpoint \
-  --endpoint-id 0x7f3a...
+composed update-endpoint --endpoint-id 0x7f3a...
 
 # Or provide the new hash directly
-uv run python cli.py update-endpoint \
-  --endpoint-id 0x7f3a... \
-  --hash        0xnew...
+composed update-endpoint --endpoint-id 0x7f3a... --hash 0xnew...
 ```
 
 If the live hash already matches what's on-chain, the command exits without sending a transaction.
@@ -205,34 +288,12 @@ If the live hash already matches what's on-chain, the command exits without send
 
 ## Other commands
 
-### Compute integrity hash (no transaction)
-
-Fetch the x402 payment metadata from a live server and print the integrity hash — without sending any transaction. Useful to preview the hash before registering or updating an endpoint.
-
-```bash
-uv run python cli.py hash-endpoint --url http://your-server.com/weather
-```
-
-For non-GET endpoints:
-
-```bash
-uv run python cli.py hash-endpoint --url http://your-server.com/data --method POST
-```
-
-**Output:**
-
-```
-  integrity hash : 0xabc123...
-```
-
----
-
 ### Update provider metadata
 
 Update your registry entry's metadata URI, payout address, or splitter address.
 
 ```bash
-uv run python cli.py update-provider \
+composed update-provider \
   --provider-id 1 \
   --payout   0xNewPayout \
   --splitter 0xNewSplitter \
@@ -249,10 +310,10 @@ Challenge a registered endpoint's integrity. The Chainlink CRE DON independently
 
 ```bash
 # By endpoint ID
-uv run python cli.py challenge --endpoint-id 0x7f3a...
+composed challenge --endpoint-id 0x7f3a...
 
 # By URL + provider ID (derives the endpoint ID)
-uv run python cli.py challenge \
+composed challenge \
   --url         http://your-server.com/weather \
   --provider-id 1
 ```
@@ -261,7 +322,7 @@ uv run python cli.py challenge \
 
 ```
   challenge id : 42
-  Check status:  uv run python cli.py challenge-status --id 42
+  Check status:  composed challenge-status --id 42
 ```
 
 ---
@@ -269,7 +330,7 @@ uv run python cli.py challenge \
 ### Check challenge status
 
 ```bash
-uv run python cli.py challenge-status --id 42
+composed challenge-status --id 42
 ```
 
 Status is one of `Pending`, `Valid` (endpoint OK), or `Invalid` (provider slashed).
@@ -282,13 +343,13 @@ List all registered providers and their endpoints.
 
 ```bash
 # All providers + all endpoints
-uv run python cli.py registry
+composed registry
 
 # Only endpoints registered by your signer
-uv run python cli.py registry --address
+composed registry --address
 
 # Only endpoints registered by a specific address
-uv run python cli.py registry --address 0xABC...
+composed registry --address 0xABC...
 ```
 
 ---
@@ -339,14 +400,14 @@ If you only have one deployed provider, `--splitter` can be omitted and the addr
 
 ```bash
 # Inspect only (auto-detect splitter)
-uv run python cli.py splitter
+composed splitter
 
 # Inspect only (explicit address)
-uv run python cli.py splitter --splitter 0xDEF...
+composed splitter --splitter 0xDEF...
 
 # Distribute pending USDC to all buckets
-uv run python cli.py splitter --distribute
-uv run python cli.py splitter --splitter 0xDEF... --distribute
+composed splitter --distribute
+composed splitter --splitter 0xDEF... --distribute
 ```
 
 If you have multiple deployed providers the command will list them and ask you to specify one explicitly.
@@ -411,10 +472,14 @@ challenge-status
   --id                  Challenge ID                   (required)
 
 vault
-  --vault               Vault address                  (required)
+  --vault               Vault address                  (auto-detected if omitted)
   --open-deposits       Call openDeposits() (owner only)
   --deposit             Deposit USDC raw units
   --redeem              Redeem shares (raw units)
+
+revenue-share
+  --rs                  Revenue share address          (auto-detected if omitted)
+  --claim               Claim all accrued USDC dividends
 
 splitter
   --splitter            Splitter address               (auto-detected if omitted)

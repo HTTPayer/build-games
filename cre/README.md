@@ -1,4 +1,4 @@
-# API Integrity Protocol — CRE Workflow
+# Composed Protocol — CRE Workflow
 
 Chainlink CRE workflow that verifies registered API endpoints are serving honest
 x402 payment metadata. Replaces Chainlink Functions (which can't read 4xx response
