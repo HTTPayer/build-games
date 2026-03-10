@@ -219,6 +219,53 @@ build-games/
 
 ---
 
+## Ways to interact
+
+### `composed` CLI
+
+A terminal-based interactive shell for providers. Stake, deploy, register endpoints, inspect vaults and splitters, open challenges — all from the command line.
+
+```bash
+cd contracts/scripts && uv sync
+composed        # opens interactive shell
+composed status # one-shot
+```
+
+See [`contracts/scripts/CLI.md`](contracts/scripts/CLI.md) for the full guide.
+
+### Smart contracts (direct)
+
+All contracts are verified on Snowscan. Call them directly from any wallet, script, or protocol — no SDK required. Deployed addresses are in the table below; ABIs are in [`abis/`](abis/).
+
+---
+
+### Python SDK (`composed`)
+
+A typed Python client for building scripts, integrations, or custom tooling on top of the protocol. Install as a local package from `contracts/`.
+
+```python
+from composed import ComposedClient
+
+client = ComposedClient(rpc_url="...", private_key="0x...")
+client.stake()
+deployed = client.deploy_provider(name="My API", symbol="MAPI", vault_bp=9800)
+```
+
+### Frontend app
+
+A web dashboard for providers to manage their vault, splitter, and endpoints. Connect your wallet and interact with the protocol without a CLI.
+
+**Live at [composed.httpayer.com](https://composed.httpayer.com/)**
+
+To run locally:
+
+```bash
+cd frontend
+npm install && npm run dev
+```
+
+---
+
 ## Quickstart
 
 ### 1. Deploy contracts
