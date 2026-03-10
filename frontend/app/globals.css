@@ -1,0 +1,307 @@
+@import "tailwindcss";
+
+/* Enable class-based dark mode */
+@custom-variant dark (&:is(.dark *));
+
+/* ── Map CSS variables → Tailwind theme tokens ──────────────── */
+@theme inline {
+  --color-background: hsl(var(--background));
+  --color-foreground: hsl(var(--foreground));
+  --color-card: hsl(var(--card));
+  --color-card-foreground: hsl(var(--card-foreground));
+  --color-popover: hsl(var(--popover));
+  --color-popover-foreground: hsl(var(--popover-foreground));
+  --color-primary: hsl(var(--primary));
+  --color-primary-foreground: hsl(var(--primary-foreground));
+  --color-secondary: hsl(var(--secondary));
+  --color-secondary-foreground: hsl(var(--secondary-foreground));
+  --color-muted: hsl(var(--muted));
+  --color-muted-foreground: hsl(var(--muted-foreground));
+  --color-accent: hsl(var(--accent));
+  --color-accent-foreground: hsl(var(--accent-foreground));
+  --color-destructive: hsl(var(--destructive));
+  --color-destructive-foreground: hsl(var(--destructive-foreground));
+  --color-border: hsl(var(--border));
+  --color-input: hsl(var(--input));
+  --color-ring: hsl(var(--ring));
+  --radius-sm: calc(var(--radius) - 4px);
+  --radius-md: calc(var(--radius) - 2px);
+  --radius-lg: var(--radius);
+}
+
+/* ── Light theme variables ──────────────────────────────────── */
+:root {
+  --background: 0 0% 100%;
+  --foreground: 222.2 84% 4.9%;
+  --card: 0 0% 100%;
+  --card-foreground: 222.2 84% 4.9%;
+  --popover: 0 0% 100%;
+  --popover-foreground: 222.2 84% 4.9%;
+  --primary: 221.2 83.2% 53.3%;
+  --primary-foreground: 210 40% 98%;
+  --secondary: 210 40% 96.1%;
+  --secondary-foreground: 222.2 47.4% 11.2%;
+  --muted: 210 40% 96.1%;
+  --muted-foreground: 215.4 16.3% 46.9%;
+  --accent: 210 40% 96.1%;
+  --accent-foreground: 222.2 47.4% 11.2%;
+  --destructive: 0 84.2% 60.2%;
+  --destructive-foreground: 210 40% 98%;
+  --border: 214.3 31.8% 91.4%;
+  --input: 214.3 31.8% 91.4%;
+  --ring: 221.2 83.2% 53.3%;
+  --radius: 0.5rem;
+}
+
+/* ── Dark theme variables ───────────────────────────────────── */
+.dark {
+  --background: 222.2 84% 4.9%;
+  --foreground: 210 40% 98%;
+  --card: 222.2 84% 4.9%;
+  --card-foreground: 210 40% 98%;
+  --popover: 222.2 84% 4.9%;
+  --popover-foreground: 210 40% 98%;
+  --primary: 217.2 91.2% 59.8%;
+  --primary-foreground: 222.2 47.4% 11.2%;
+  --secondary: 217.2 32.6% 17.5%;
+  --secondary-foreground: 210 40% 98%;
+  --muted: 217.2 32.6% 17.5%;
+  --muted-foreground: 215 20.2% 65.1%;
+  --accent: 217.2 32.6% 17.5%;
+  --accent-foreground: 210 40% 98%;
+  --destructive: 0 62.8% 30.6%;
+  --destructive-foreground: 210 40% 98%;
+  --border: 217.2 32.6% 17.5%;
+  --input: 217.2 32.6% 17.5%;
+  --ring: 224.3 76.3% 48%;
+  --radius: 0.5rem;
+}
+
+/* ── Base resets ─────────────────────────────────────────────── */
+* {
+  border-color: hsl(var(--border));
+}
+
+body {
+  background-color: hsl(var(--background));
+  color: hsl(var(--foreground));
+}
+
+/* ── 3D Perspective grid ─────────────────────────────────────── */
+.grid-3d-wrapper {
+  position: absolute;
+  inset: 0;
+  overflow: hidden;
+  pointer-events: none;
+  display: flex;
+  align-items: flex-end;
+  justify-content: center;
+}
+
+.grid-3d {
+  width: 200%;
+  height: 70%;
+  background-image:
+    linear-gradient(to right, hsl(0 0% 100% / 0.7) 1px, transparent 1px),
+    linear-gradient(to bottom, hsl(0 0% 100% / 0.5) 1px, transparent 1px);
+  background-size: 60px 40px;
+  transform: perspective(500px) rotateX(65deg) translateZ(0);
+  transform-origin: center top;
+  opacity: 0.6;
+  mask-image: 
+    linear-gradient(to top, black 10%, transparent 75%),
+    linear-gradient(to right, transparent 2%, black 20%, black 80%, transparent 98%);
+  mask-composite: intersect;
+  -webkit-mask-image:
+    linear-gradient(to top, black 10%, transparent 75%),
+    linear-gradient(to right, transparent 2%, black 20%, black 80%, transparent 98%);
+  -webkit-mask-composite: source-in;
+  animation: grid-scroll 20s linear infinite;
+}
+
+@keyframes grid-scroll {
+  0%   { background-position: 0 0; }
+  100% { background-position: 0 -800px; }
+}
+
+/* ── Hero gradient text ─────────────────────────────────────── */
+.hero-gradient-text {
+  background: linear-gradient(135deg, hsl(217 91% 60%), hsl(260 70% 65%), hsl(160 80% 55%));
+  background-size: 200% 200%;
+  -webkit-background-clip: text;
+  -webkit-text-fill-color: transparent;
+  background-clip: text;
+  animation: gradient-shift 6s ease-in-out infinite;
+}
+
+@keyframes gradient-shift {
+  0%, 100% { background-position: 0% 50%; }
+  50%      { background-position: 100% 50%; }
+}
+
+/* ── Hero badge ─────────────────────────────────────────────── */
+.hero-badge {
+  position: relative;
+  background: hsl(var(--background) / 0.6) !important;
+  border: 1px solid hsl(var(--primary) / 0.15) !important;
+  backdrop-filter: blur(12px);
+  box-shadow:
+    0 0 20px hsl(var(--primary) / 0.06),
+    inset 0 0.5px 0 hsl(255 255 255 / 0.06);
+  transition: all 0.3s ease;
+}
+
+.hero-badge:hover {
+  border-color: hsl(var(--primary) / 0.3) !important;
+  box-shadow:
+    0 0 30px hsl(var(--primary) / 0.12),
+    inset 0 0.5px 0 hsl(255 255 255 / 0.1);
+  transform: translateY(-1px);
+}
+
+/* ── Section badge ──────────────────────────────────────────── */
+.section-badge {
+  background: hsl(var(--primary) / 0.08) !important;
+  border: 1px solid hsl(var(--primary) / 0.15) !important;
+  color: hsl(var(--primary)) !important;
+  font-weight: 600 !important;
+  letter-spacing: 0.05em;
+  text-transform: uppercase;
+  font-size: 11px !important;
+  padding: 4px 14px !important;
+  transition: all 0.3s ease;
+}
+
+.section-badge:hover {
+  background: hsl(var(--primary) / 0.14) !important;
+  border-color: hsl(var(--primary) / 0.3) !important;
+  box-shadow: 0 0 20px hsl(var(--primary) / 0.1);
+}
+
+/* ── Hero pills (white with gradient hover) ─────────────────── */
+.hero-pill {
+  transition: all 0.35s ease;
+  cursor: default;
+}
+
+.hero-pill:hover {
+  border-color: hsl(var(--primary) / 0.3);
+  color: transparent;
+  background: hsl(var(--foreground) / 0.06);
+  background-image: linear-gradient(135deg, hsl(217 91% 60%), hsl(260 70% 65%), hsl(160 80% 55%));
+  background-size: 200% 200%;
+  -webkit-background-clip: text;
+  -webkit-text-fill-color: transparent;
+  background-clip: text;
+  animation: gradient-shift 3s ease-in-out infinite;
+  transform: translateY(-1px);
+}
+
+/* ── Feature card hover ─────────────────────────────────────── */
+.feature-card {
+  position: relative;
+  transition: all 0.5s cubic-bezier(0.25, 0.4, 0.25, 1);
+}
+
+.feature-card::before {
+  content: '';
+  position: absolute;
+  inset: 0;
+  border-radius: inherit;
+  padding: 1px;
+  background: linear-gradient(
+    135deg,
+    transparent 0%,
+    hsl(var(--primary) / 0.15) 50%,
+    transparent 100%
+  );
+  -webkit-mask: linear-gradient(#fff 0 0) content-box, linear-gradient(#fff 0 0);
+  -webkit-mask-composite: xor;
+  mask-composite: exclude;
+  opacity: 0;
+  transition: opacity 0.5s ease;
+  pointer-events: none;
+}
+
+.feature-card:hover::before {
+  opacity: 1;
+}
+
+.feature-card:hover {
+  transform: translateY(-4px);
+  box-shadow:
+    0 20px 40px hsl(var(--primary) / 0.04),
+    0 0 60px hsl(var(--primary) / 0.02);
+}
+
+/* ── Stat card ──────────────────────────────────────────────── */
+.stat-card {
+  transition: all 0.4s ease;
+}
+
+.stat-card:hover {
+  border-color: hsl(var(--primary) / 0.2);
+  background: hsl(var(--primary) / 0.04);
+  transform: translateY(-2px);
+  box-shadow: 0 8px 24px hsl(var(--primary) / 0.06);
+}
+
+/* ── CTA glow button ────────────────────────────────────────── */
+.glow-button {
+  position: relative;
+  overflow: hidden;
+}
+
+.glow-button::before {
+  content: '';
+  position: absolute;
+  inset: -2px;
+  border-radius: inherit;
+  background: linear-gradient(135deg, hsl(217 91% 60% / 0.5), hsl(260 70% 65% / 0.3));
+  filter: blur(14px);
+  opacity: 0;
+  transition: opacity 0.4s ease;
+  z-index: -1;
+}
+
+.glow-button:hover::before {
+  opacity: 1;
+}
+
+/* ── Layer card color utilities ─────────────────────────────── */
+.layer-card-emerald:hover { border-color: hsl(160 80% 50% / 0.3) !important; }
+.layer-card-blue:hover    { border-color: hsl(217 91% 60% / 0.3) !important; }
+.layer-card-violet:hover  { border-color: hsl(260 60% 60% / 0.3) !important; }
+
+.layer-card-emerald:hover { box-shadow: 0 0 40px hsl(160 80% 50% / 0.06); }
+.layer-card-blue:hover    { box-shadow: 0 0 40px hsl(217 91% 60% / 0.06); }
+.layer-card-violet:hover  { box-shadow: 0 0 40px hsl(260 60% 60% / 0.06); }
+
+.layer-icon-emerald { background: hsl(160 80% 50% / 0.12); color: hsl(160 80% 55%); }
+.layer-icon-blue    { background: hsl(217 91% 60% / 0.12); color: hsl(217 91% 60%); }
+.layer-icon-violet  { background: hsl(260 60% 60% / 0.12); color: hsl(260 60% 65%); }
+
+.layer-text-emerald { color: hsl(160 80% 55%); }
+.layer-text-blue    { color: hsl(217 91% 60%); }
+.layer-text-violet  { color: hsl(260 60% 65%); }
+
+/* ── Animation utilities ────────────────────────────────────── */
+@keyframes fade-in {
+  from { opacity: 0; }
+  to   { opacity: 1; }
+}
+
+@keyframes slide-up {
+  from { opacity: 0; transform: translateY(24px); }
+  to   { opacity: 1; transform: translateY(0); }
+}
+
+.animate-fade-in  { animation: fade-in 0.8s ease-out both; }
+.animate-slide-up { animation: slide-up 0.7s ease-out both; }
+
+.animate-delay-1 { animation-delay: 0.1s; }
+.animate-delay-2 { animation-delay: 0.2s; }
+.animate-delay-3 { animation-delay: 0.3s; }
+.animate-delay-4 { animation-delay: 0.4s; }
+.animate-delay-5 { animation-delay: 0.5s; }
+.animate-delay-6 { animation-delay: 0.6s; }
