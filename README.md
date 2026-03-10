@@ -158,29 +158,34 @@ build-games/
 │   ├── src/                          Solidity contracts (Layer 0, 1, 2)
 │   ├── script/DeployAll.s.sol        Deploy script
 │   ├── broadcast/                    Deployed addresses (source of truth)
-│   ├── scripts/                      Python tooling
-│   │   ├── cli.py                    Provider CLI (stake, deploy, register, challenge)
-│   │   ├── admin_cli.py              Admin CLI (set-forwarder, mint-usdc, etc.)
-│   │   ├── cre_watcher.py            Auto-settles challenges via CRE simulate
-│   │   ├── challenger_watcher.py     Monitors endpoints, challenges mismatches
-│   │   ├── utils.py                  Shared web3 helpers
-│   │   ├── x402_metadata.py          Hash computation
-│   │   └── verify.py                 Snowtrace contract verification
-│   └── chainlink/
-│       ├── compute-hash.js           Manual hash dry-run
-│       └── dry-run.js                Verify hash before challenging
+│   ├── composed/                     Python SDK (installable, shared by CLI + scripts)
+│   │   ├── client.py                 ComposedClient — typed wrappers for all contracts
+│   │   ├── _abis.py                  Trimmed ABIs for SDK-managed contracts
+│   │   └── _addresses.py             Deployed contract addresses
+│   └── scripts/                      Python tooling
+│       ├── cli.py                    Provider CLI — entry point: `composed`
+│       ├── admin_cli.py              Admin CLI (set-forwarder, mint-usdc, etc.)
+│       ├── cre_watcher.py            Auto-settles challenges via CRE simulate
+│       ├── challenger_watcher.py     Monitors endpoints, challenges mismatches
+│       ├── analytics_indexer.py      Indexes protocol events into SQLite
+│       ├── analytics_api.py          FastAPI REST layer over the indexed data
+│       ├── analytics_dashboard.py    Streamlit dashboard
+│       ├── utils.py                  Shared web3 helpers
+│       ├── x402_metadata.py          x402 hash computation
+│       └── verify.py                 Snowtrace contract verification
 │
 ├── cre/                              Chainlink CRE workflow
-│   ├── project.yaml                  CRE project config (RPC, experimental chains)
+│   ├── project.sample.yaml           CRE project config template
 │   └── integrity-workflow/
 │       ├── main.ts                   Log trigger → hash verify → onReport
-│       ├── workflow.yaml             Staging / production targets
+│       ├── workflow.sample.yaml      Staging / production targets template
 │       └── config.staging.json       ChallengeManager address + chain selector
 │
 ├── servers/                          x402 server examples
 │   └── src/server.ts                 Reference implementation
 │
 └── docs/
+    ├── analytics.md                  Analytics API reference
     ├── frontend-provider-registration.md   Wagmi integration guide
     └── OVERVIEW.md
 ```
@@ -234,19 +239,25 @@ forge script script/DeployAll.s.sol \
 
 ```bash
 cd contracts/scripts
-cp .env.sample .env   # fill in keys
+cp .env.sample .env   # fill in PRIVATE_KEY, GATEWAY_URL
+uv sync               # installs CLI entry point
 
-uv run python cli.py stake
-uv run python cli.py deploy-provider --name "My API" --symbol "MAPI"
+composed stake
+composed deploy-provider --name "My API" --symbol "MAPI"
 # → note the splitter address, set it as payTo in your x402 server
 
-uv run python cli.py register-endpoint \
+# Verify what hash your server will register
+composed hash-endpoint --url https://your-api.com/endpoint
+
+composed register-endpoint \
   --provider-id 1 --splitter 0x<splitter> --url https://your-api.com/endpoint
 ```
 
 ### 3. Start the watchers
 
 ```bash
+cd contracts/scripts
+
 # Settles challenges automatically via CRE simulate
 uv run python cre_watcher.py
 
@@ -254,7 +265,24 @@ uv run python cre_watcher.py
 uv run python challenger_watcher.py
 ```
 
-### 4. Simulate the CRE workflow manually
+### 4. Run the analytics dashboard
+
+```bash
+cd contracts/scripts
+
+# Sync historical events into SQLite
+uv run python analytics_indexer.py --once
+
+# Terminal 1 — API
+uv run uvicorn analytics_api:app --port 8000
+
+# Terminal 2 — Dashboard
+uv run streamlit run analytics_dashboard.py
+```
+
+See `docs/analytics.md` for full details and API reference.
+
+### 5. Simulate the CRE workflow manually
 
 ```bash
 cd cre
@@ -284,6 +312,10 @@ See `cre/README.md` for the full CRE setup guide.
 | CRE challenge watcher | Complete |
 | Challenger watcher | Complete |
 | Frontend guide | Complete (`docs/frontend-provider-registration.md`) |
+| Python SDK (`composed`) | Complete (`contracts/composed/`) |
+| Analytics indexer | Complete (`contracts/scripts/analytics_indexer.py`) |
+| Analytics API | Complete (`contracts/scripts/analytics_api.py`) |
+| Analytics dashboard | Complete (`contracts/scripts/analytics_dashboard.py`) |
 | Frontend app | Planned |
 
 ---

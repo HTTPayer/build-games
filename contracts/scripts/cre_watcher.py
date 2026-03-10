@@ -37,9 +37,10 @@ load_dotenv()
 # ---------------------------------------------------------------------------
 
 POLL_INTERVAL = 15  # seconds between live polls
+CHUNK = 2000        # max blocks per get_logs request
 
-# Relative to this file: contracts/test/ → build-games/onchain-router/
-CRE_WORK_DIR = Path(__file__).parents[2] / "onchain-router"
+_cre_env = os.getenv("CRE_WORK_DIR")
+CRE_WORK_DIR = Path(_cre_env) if _cre_env else Path(__file__).parents[2] / "cre"
 
 # Persisted state
 STATE_FILE = Path(__file__).parent / "cre_watcher_state.json"
@@ -226,10 +227,18 @@ def main():
 
         if from_block <= current_block:
             print(f"[{time.strftime('%H:%M:%S')}] blocks {from_block}–{current_block}")
-            events = cm.events.ChallengeOpened.get_logs(
-                from_block=from_block,
-                to_block=current_block,
-            )
+            events = []
+            start = from_block
+            while start <= current_block:
+                end = min(start + CHUNK - 1, current_block)
+                try:
+                    chunk = cm.events.ChallengeOpened.get_logs(
+                        from_block=start, to_block=end,
+                    )
+                    events.extend(chunk)
+                except Exception as exc:
+                    print(f"  [warn] get_logs {start}-{end}: {exc}")
+                start = end + 1
             print(f"  {len(events)} new ChallengeOpened event(s)")
 
             for event in events:

@@ -92,7 +92,7 @@ def send_tx(w3: Web3, account, contract_fn, label: str = ""):
 
     Returns the transaction receipt. Raises on revert (status == 0).
     """
-    explorer = os.getenv("EXPLORER_URL", "https://testnet.snowtrace.io/tx/")
+    explorer = os.getenv("EXPLORER_URL", "https://testnet.snowscan.xyz/tx/")
 
     tx = contract_fn.build_transaction({
         "from": account.address,

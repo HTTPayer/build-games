@@ -49,6 +49,7 @@ contract APIIntegrityRegistry is AccessControl, Pausable, ReentrancyGuard {
     event ProviderRegistered(uint256 indexed id, address indexed owner);
     event ProviderUpdated(uint256 indexed id, address indexed owner);
     event EndpointRegistered(bytes32 indexed endpointId, address indexed provider);
+    event EndpointHashUpdated(bytes32 indexed endpointId, bytes32 newIntegrityHash, uint256 version);
     event EndpointChecked(bytes32 indexed endpointId, uint256 timestamp);
     event MinimumStakeUpdated(uint256 newAmount);
     event StakeManagerUpdated(address stakeManager);
@@ -159,6 +160,21 @@ contract APIIntegrityRegistry is AccessControl, Pausable, ReentrancyGuard {
         providerEndpoints[msg.sender].push(endpointId);
 
         emit EndpointRegistered(endpointId, msg.sender);
+    }
+
+    function updateEndpoint(
+        bytes32 endpointId,
+        bytes32 newIntegrityHash
+    ) external whenNotPaused {
+        Endpoint storage e = endpoints[endpointId];
+        require(e.registeredAt != 0, "not registered");
+        require(e.active,             "inactive");
+        require(e.provider == msg.sender, "not owner");
+
+        e.integrityHash = newIntegrityHash;
+        e.version++;
+
+        emit EndpointHashUpdated(endpointId, newIntegrityHash, e.version);
     }
 
     function recordCheck(bytes32 endpointId)

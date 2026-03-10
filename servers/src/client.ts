@@ -20,7 +20,7 @@ registerExactEvmScheme(client, { signer });
 const fetchWithPayment = wrapFetchWithPayment(fetch, client);
 
 // Make request - payment is handled automatically
-const response = await fetchWithPayment("http://oit47hccqpb2belgf7ccs4sq4o.ingress.akashprovid.com/weather", {
+const response = await fetchWithPayment("http://oit47hccqpb2belgf7ccs4sq4o.ingress.akashprovid.com/weather-2", {
   method: "GET",
 });
 

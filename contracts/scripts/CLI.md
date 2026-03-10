@@ -1,19 +1,18 @@
-# HTTPayer Provider CLI
+# Composed Provider CLI
 
-All commands run from `contracts/test/`:
+All commands run from `contracts/scripts/`:
 
 ```bash
-cd contracts/test
+cd contracts/scripts
 ```
 
-Requires a `.env` file in `contracts/test/` with:
+Requires a `.env` file in `contracts/scripts/` with:
 
 ```env
 GATEWAY_URL=https://api.avax-test.network/ext/bc/C/rpc
 PRIVATE_KEY=0x...
 PROVIDER_PRIVATE_KEY=0x...   # optional, falls back to PRIVATE_KEY
 ETHERSCAN_API_KEY=...         # for contract verification on Snowscan
-X402_ENDPOINT=http://...      # your live server URL (used by register-endpoint)
 ```
 
 ---
@@ -40,6 +39,20 @@ uv run python cli.py stake
 
 - If already staked to the minimum → prints `✓ stake sufficient` and exits
 - If short → approves the StakeManager and stakes the difference
+
+To unstake (starts a cooldown period):
+
+```bash
+uv run python cli.py unstake
+uv run python cli.py unstake --amount 10000000   # partial unstake (raw USDC units)
+```
+
+To withdraw after cooldown expires:
+
+```bash
+uv run python cli.py withdraw
+uv run python cli.py withdraw --amount 10000000
+```
 
 ---
 
@@ -163,17 +176,203 @@ uv run python cli.py register-endpoint \
 
 ---
 
+### 6. Update endpoint hash
+
+When you change your x402 payment terms (e.g. new price), the on-chain integrity hash needs to match. This bumps the hash and increments the endpoint version.
+
+```bash
+# Re-fetch from the live server automatically
+uv run python cli.py update-endpoint \
+  --endpoint-id 0x7f3a...
+
+# Or provide the new hash directly
+uv run python cli.py update-endpoint \
+  --endpoint-id 0x7f3a... \
+  --hash        0xnew...
+```
+
+If the live hash already matches what's on-chain, the command exits without sending a transaction.
+
+**Output:**
+
+```
+  current hash  : 0xold...  (v1)
+  new hash      : 0xnew...
+  ✓ hash updated to 0xnew...  (v2)
+```
+
+---
+
+## Other commands
+
+### Compute integrity hash (no transaction)
+
+Fetch the x402 payment metadata from a live server and print the integrity hash — without sending any transaction. Useful to preview the hash before registering or updating an endpoint.
+
+```bash
+uv run python cli.py hash-endpoint --url http://your-server.com/weather
+```
+
+For non-GET endpoints:
+
+```bash
+uv run python cli.py hash-endpoint --url http://your-server.com/data --method POST
+```
+
+**Output:**
+
+```
+  integrity hash : 0xabc123...
+```
+
+---
+
+### Update provider metadata
+
+Update your registry entry's metadata URI, payout address, or splitter address.
+
+```bash
+uv run python cli.py update-provider \
+  --provider-id 1 \
+  --payout   0xNewPayout \
+  --splitter 0xNewSplitter \
+  --metadata-uri "https://example.com/metadata.json"
+```
+
+Omit any flag to keep the existing value.
+
+---
+
+### Open a challenge
+
+Challenge a registered endpoint's integrity. The Chainlink CRE DON independently fetches the endpoint and verifies the hash. A challenge fee (in USDC) is required and is refunded if the endpoint is valid.
+
+```bash
+# By endpoint ID
+uv run python cli.py challenge --endpoint-id 0x7f3a...
+
+# By URL + provider ID (derives the endpoint ID)
+uv run python cli.py challenge \
+  --url         http://your-server.com/weather \
+  --provider-id 1
+```
+
+**Output:**
+
+```
+  challenge id : 42
+  Check status:  uv run python cli.py challenge-status --id 42
+```
+
+---
+
+### Check challenge status
+
+```bash
+uv run python cli.py challenge-status --id 42
+```
+
+Status is one of `Pending`, `Valid` (endpoint OK), or `Invalid` (provider slashed).
+
+---
+
+### Registry
+
+List all registered providers and their endpoints.
+
+```bash
+# All providers + all endpoints
+uv run python cli.py registry
+
+# Only endpoints registered by your signer
+uv run python cli.py registry --address
+
+# Only endpoints registered by a specific address
+uv run python cli.py registry --address 0xABC...
+```
+
+---
+
+### Vault inspection
+
+Inspect a vault's state, open deposits, deposit USDC, or redeem shares. `--vault` is auto-detected if you have one deployed provider.
+
+```bash
+# Read-only inspection (auto-detect)
+composed vault
+
+# Explicit address
+composed vault --vault 0xABC...
+
+# Open deposits (owner only)
+composed vault --open-deposits
+
+# Deposit 10 USDC
+composed vault --deposit 10000000
+
+# Redeem 5 shares
+composed vault --redeem 5000000
+```
+
+### Revenue share inspection
+
+Inspect a revenue share contract — supply, lifetime EPS, APR, and your claimable USDC. `--rs` is auto-detected if you have one deployed.
+
+```bash
+# Read-only (auto-detect)
+composed revenue-share
+
+# Explicit address
+composed revenue-share --rs 0xGHI...
+
+# Claim all accrued USDC dividends
+composed revenue-share --claim
+```
+
+---
+
+### Splitter inspection
+
+Inspect a splitter's routing config and pending balance, or trigger a distribution.
+
+If you only have one deployed provider, `--splitter` can be omitted and the address is auto-detected from on-chain events.
+
+```bash
+# Inspect only (auto-detect splitter)
+uv run python cli.py splitter
+
+# Inspect only (explicit address)
+uv run python cli.py splitter --splitter 0xDEF...
+
+# Distribute pending USDC to all buckets
+uv run python cli.py splitter --distribute
+uv run python cli.py splitter --splitter 0xDEF... --distribute
+```
+
+If you have multiple deployed providers the command will list them and ask you to specify one explicitly.
+
+---
+
 ## Reference
 
 ### All flags
 
 ```
+stake
+  (no flags)
+
+unstake
+  --amount    Raw USDC units to unstake (default: full stake)
+
+withdraw
+  --amount    Raw USDC units to withdraw (default: full stake)
+
 deploy-provider
   --name                Vault token name               (required)
   --symbol              Vault token symbol             (required)
   --vault-bp            Basis points to vault          (default: 9800)
   --revenue-share-bp    Basis points to revenue share  (default: 0)
-  --rs-shares           Genesis shares for RS contract (required if --revenue-share-bp > 0)
+  --rs-shares           Genesis shares for RS contract
   --rs-recipient        RS genesis recipient           (default: signer)
   --genesis-shares      Vault genesis shares to mint   (default: 0)
   --genesis-deposit     USDC raw units to seed vault   (default: 0)
@@ -181,12 +380,51 @@ deploy-provider
   --provider-treasury   Address for remainder direct cut
   --metadata-uri        Metadata URI for registry
 
+hash-endpoint
+  --url                 Full endpoint URL              (required)
+  --method              HTTP method                    (default: GET)
+
 register-endpoint
   --provider-id         Registry provider ID           (required)
   --splitter            Splitter address               (required)
   --url                 Full endpoint URL              (required)
   --method              HTTP method                    (default: GET)
   --hash                Pre-computed integrity hash    (skips live fetch)
+
+update-endpoint
+  --endpoint-id         Endpoint ID (bytes32 hex)      (required)
+  --hash                New integrity hash             (omit to re-fetch live)
+
+update-provider
+  --provider-id         Provider ID to update          (required)
+  --metadata-uri        New metadata URI               (keep existing if omitted)
+  --payout              New payout address             (keep existing if omitted)
+  --splitter            New splitter address           (keep existing if omitted)
+
+challenge
+  --endpoint-id         Endpoint ID (bytes32 hex)      (mutually exclusive with --url)
+  --url                 Endpoint URL                   (requires --provider-id)
+  --provider-id         Provider ID                    (used with --url)
+  --method              HTTP method                    (default: GET)
+
+challenge-status
+  --id                  Challenge ID                   (required)
+
+vault
+  --vault               Vault address                  (required)
+  --open-deposits       Call openDeposits() (owner only)
+  --deposit             Deposit USDC raw units
+  --redeem              Redeem shares (raw units)
+
+splitter
+  --splitter            Splitter address               (auto-detected if omitted)
+  --distribute          Call distribute() if balance > 0
+
+registry
+  --address             Filter by address (omit = all, flag alone = signer)
+
+status
+  (no flags)
 ```
 
 ### USDC raw units
@@ -198,3 +436,4 @@ All USDC amounts use 6 decimals:
 | 0.001 USDC | 1,000 |
 | 1 USDC | 1,000,000 |
 | 10 USDC | 10,000,000 |
+| 100 USDC | 100,000,000 |

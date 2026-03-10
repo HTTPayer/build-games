@@ -47,6 +47,8 @@ contracts/lib/
 
 **/.venv/
 **/__pycache__/
+contracts/composed.egg-info/
+contracts/*.egg-info/
 *.pyc
 *.pyo
 *.egg-info/
@@ -55,6 +57,12 @@ contracts/lib/
 # Watcher runtime state (block cursors, processed IDs — env-specific)
 contracts/scripts/cre_watcher_state.json
 contracts/scripts/challenger_watcher_state.json
+
+# Analytics runtime state
+contracts/scripts/analytics_state.json
+
+# SQLite databases (runtime artifacts)
+*.db
 
 # =============================================================================
 # NODE / TYPESCRIPT
@@ -71,6 +79,10 @@ contracts/scripts/challenger_watcher_state.json
 cre/integrity-workflow/.workflow-temp-*.ts
 cre/integrity-workflow/tmp.js
 cre/integrity-workflow/tmp.wasm
+
+# CRE project config (contains secrets — use *.sample.yaml as template)
+cre/project.yaml
+cre/integrity-workflow/workflow.yaml
 
 # =============================================================================
 # OS / EDITOR

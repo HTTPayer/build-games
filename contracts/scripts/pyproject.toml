@@ -1,3 +1,7 @@
+[build-system]
+requires = ["setuptools"]
+build-backend = "setuptools.build_meta"
+
 [project]
 name = "test"
 version = "0.1.0"
@@ -6,4 +10,22 @@ dependencies = [
     "eth-account>=0.13.7",
     "python-dotenv>=1.2.2",
     "web3>=7.14.1",
+    "composed",
+    "fastapi>=0.115.0",
+    "uvicorn[standard]>=0.30.0",
+    "streamlit>=1.35.0",
+    "plotly>=5.22.0",
+    "pandas>=2.2.0",
 ]
+
+[tool.uv.sources]
+composed = { path = "../" }
+
+[project.scripts]
+composed = "cli:main"
+
+[tool.setuptools]
+py-modules = ["cli"]
+
+[tool.uv]
+package = true
