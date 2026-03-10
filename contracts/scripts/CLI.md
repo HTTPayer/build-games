@@ -13,7 +13,7 @@ Interactive shell and one-shot CLI for provider operations on Avalanche Fuji.
 | **Avalanche Fuji RPC** | Free endpoint: `https://api.avax-test.network/ext/bc/C/rpc` — or use an Alchemy/Infura Fuji URL for higher rate limits |
 | **Funded wallet** | You need testnet AVAX (for gas) and testnet USDC (for staking + challenge fees) on Fuji |
 | **Testnet AVAX** | Fuji faucet: https://faucet.avax.network/ |
-| **Testnet USDC** | Ask the admin to mint via `admin_cli.py mint-usdc` |
+| **Testnet USDC** | Get from https://faucet.circle.com/ (select Avalanche Fuji) |
 
 ---
 
