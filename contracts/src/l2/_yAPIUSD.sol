@@ -1,57 +1,65 @@
 // SPDX-License-Identifier: MIT
 pragma solidity 0.8.30;
 
+/// @dev DEPRECATED — superseded by the RS-token-native version. Kept for reference only.
+
 import "@openzeppelin/contracts/token/ERC20/ERC20.sol";
 import "@openzeppelin/contracts/token/ERC20/IERC20.sol";
 import "@openzeppelin/contracts/token/ERC20/utils/SafeERC20.sol";
 import "@openzeppelin/contracts/utils/Pausable.sol";
 import "@openzeppelin/contracts/utils/ReentrancyGuard.sol";
-import "../interfaces/IProviderRevenueShare.sol";
+import "@openzeppelin/contracts/interfaces/IERC4626.sol";
 
-/// @title yAPIUSD — Yield-Bearing Stablecoin Backed by RS Token Dividends
+/// @title yAPIUSD — API Revenue Yield-Bearing Stablecoin (GLUSD Mirror)
+/// @notice Architecture B: Users deposit USDC and earn yield passively.
+///         The API provider (treasury) seeds the contract with vault shares.
+///         As API revenue flows into the vault, share prices rise, growing
+///         the contract's total USDC-equivalent backing and pushing the
+///         exchange rate upward — making every yAPIUSD worth more over time.
 ///
-/// @notice Architecture B — RS-token-native version.
+/// @dev    Mint:                user deposits USDC        → receives yAPIUSD at current rate
+///         Redeem:              user burns yAPIUSD         → receives USDC at appreciated rate
+///         depositVaultShares:  treasury deposits shares   → boosts exchange rate (yield engine)
 ///
-///         Treasury deposits RS tokens as the yield engine (permanently locked).
-///         Users deposit USDC → receive yAPIUSD at the current exchange rate.
-///         As the RS tokens earn dividends, the exchange rate rises automatically,
-///         making every yAPIUSD worth more USDC over time.
+///         Exchange rate = (USDC in contract + vault.convertToAssets(vault shares held)) * 1e6
+///                         ────────────────────────────────────────────────────────────────────
+///                                              yAPIUSD total supply
 ///
-/// @dev    Exchange rate = (USDC in contract + rs.claimable(address(this))) * 1e6
-///                         ────────────────────────────────────────────────────
-///                                        yAPIUSD total supply
+///         Yield source  = vault share price appreciation (from x402 API revenue)
+///         USDC in/out   = always liquid, simple user experience
 ///
-///         The claimable() term makes the rate update continuously between harvests.
-///         harvest() is permissionless — call it to crystallise pending USDC.
+///         When redemption USDC is short, the contract redeems vault shares from
+///         the backing vault to cover the shortfall — fully automated.
 ///
-///         RS tokens are NEVER redeemed. They remain locked as the permanent
-///         yield engine. Only USDC dividends flow in/out.
+///         Closely mirrors GLUSD (Galaksio-OS): `depositVaultShares` replaces
+///         GLUSD's `depositFees`, and the yield source is share price appreciation
+///         rather than explicit USDC treasury deposits.
 contract yAPIUSD is ERC20, Pausable, ReentrancyGuard {
     using SafeERC20 for IERC20;
 
     // =============================================================
-    //                            ROLES
+    //                           ROLES
     // =============================================================
 
     address public admin;
     address public pauser;
     address public feeRecipient;
 
-    /// @notice Addresses authorised to deposit RS tokens (treasury / provider)
+    /// @notice Addresses authorised to seed vault shares (API providers / protocol)
     mapping(address => bool) public isTreasury;
 
     // =============================================================
-    //                         BACKING ASSETS
+    //                        BACKING ASSETS
     // =============================================================
 
-    /// @notice The RS token that generates yield via USDC dividends
-    IProviderRevenueShare public immutable rs;
+    /// @notice The ERC4626 vault whose shares serve as the yield engine
+    IERC4626 public immutable vault;
 
-    /// @notice USDC — the stable in/out token for users
+    /// @notice Underlying stable asset (USDC) — principal in/out token
     IERC20 public immutable USDC;
 
     // =============================================================
-    //                           CONSTANTS
+    //                         CONSTANTS
     // =============================================================
 
     uint256 public constant FEE_BP           = 50;           // 0.5% on mint and redeem
@@ -60,6 +68,7 @@ contract yAPIUSD is ERC20, Pausable, ReentrancyGuard {
 
     // =============================================================
     //                     RATE SNAPSHOT SYSTEM
+    //              (adapted from GLUSD by Galaksio-OS)
     // =============================================================
 
     uint256 public constant SECONDS_PER_YEAR      = 365 days;
@@ -77,20 +86,12 @@ contract yAPIUSD is ERC20, Pausable, ReentrancyGuard {
     uint256 public lastSnapshotTime;
 
     // =============================================================
-    //                     INFORMATIONAL STATE
-    // =============================================================
-
-    /// @notice Total RS tokens locked as the yield engine (informational only)
-    uint256 public rsHeld;
-
-    // =============================================================
-    //                            EVENTS
+    //                           EVENTS
     // =============================================================
 
     event Mint(address indexed user, uint256 usdcDeposited, uint256 yMinted, uint256 fee);
     event Redeem(address indexed user, uint256 yBurned, uint256 usdcReturned, uint256 fee);
-    event RSDeposited(address indexed treasury, uint256 shares);
-    event Harvested(uint256 usdcClaimed);
+    event VaultSharesDeposited(address indexed treasury, uint256 shares, uint256 usdcEquivalent);
     event TreasuryUpdated(address indexed account, bool approved);
     event RateSnapshotTaken(uint256 rate, uint256 timestamp);
     event AdminUpdated(address indexed oldAdmin, address indexed newAdmin);
@@ -98,22 +99,20 @@ contract yAPIUSD is ERC20, Pausable, ReentrancyGuard {
     event FeeRecipientUpdated(address indexed oldRecipient, address indexed newRecipient);
 
     // =============================================================
-    //                          CONSTRUCTOR
+    //                         CONSTRUCTOR
     // =============================================================
 
     constructor(
-        IProviderRevenueShare _rs,
-        IERC20 _usdc,
-        address _initialTreasury,
-        address _feeRecipient
+        IERC4626 _vault,
+        address  _initialTreasury,
+        address  _feeRecipient
     ) ERC20("API USD Yield", "yAPIUSD") {
-        require(address(_rs)   != address(0), "yAPIUSD: zero rs");
-        require(address(_usdc) != address(0), "yAPIUSD: zero usdc");
-        require(_initialTreasury != address(0), "yAPIUSD: zero treasury");
-        require(_feeRecipient    != address(0), "yAPIUSD: zero fee recipient");
+        require(address(_vault) != address(0),    "yAPIUSD: zero vault");
+        require(_initialTreasury != address(0),    "yAPIUSD: zero treasury");
+        require(_feeRecipient != address(0),       "yAPIUSD: zero fee recipient");
 
-        rs           = _rs;
-        USDC         = _usdc;
+        vault        = _vault;
+        USDC         = IERC20(_vault.asset());
         admin        = msg.sender;
         pauser       = msg.sender;
         feeRecipient = _feeRecipient;
@@ -121,21 +120,24 @@ contract yAPIUSD is ERC20, Pausable, ReentrancyGuard {
         isTreasury[_initialTreasury] = true;
         emit TreasuryUpdated(_initialTreasury, true);
 
-        recentSnapshots[0] = RateSnapshot({ rate: 1e6, timestamp: block.timestamp });
+        uint256 initialRate = 1e6;
+        recentSnapshots[0] = RateSnapshot({ rate: initialRate, timestamp: block.timestamp });
         totalSnapshotCount = 1;
         lastSnapshotTime   = block.timestamp;
 
-        emit RateSnapshotTaken(1e6, block.timestamp);
+        emit RateSnapshotTaken(initialRate, block.timestamp);
     }
 
-    function decimals() public pure override returns (uint8) { return 6; }
+    function decimals() public pure override returns (uint8) {
+        return 6;
+    }
 
     // =============================================================
-    //                           CORE LOGIC
+    //                          CORE LOGIC
     // =============================================================
 
     /// @notice Deposit USDC to mint yAPIUSD at the current exchange rate.
-    ///         Exchange rate appreciates as RS dividends accrue.
+    ///         Exchange rate starts at 1.0 and grows as API revenue accrues.
     /// @param  usdcAmount  Gross USDC to deposit (fee deducted before minting).
     /// @return yMinted     Net yAPIUSD received.
     function mint(uint256 usdcAmount)
@@ -146,23 +148,26 @@ contract yAPIUSD is ERC20, Pausable, ReentrancyGuard {
     {
         require(usdcAmount > 0, "yAPIUSD: zero amount");
 
-        uint256 fee          = (usdcAmount * FEE_BP) / BP_SCALE;
-        uint256 usdcAfterFee = usdcAmount - fee;
+        uint256 fee           = (usdcAmount * FEE_BP) / BP_SCALE;
+        uint256 usdcAfterFee  = usdcAmount - fee;
 
-        if (fee > 0) USDC.safeTransferFrom(msg.sender, feeRecipient, fee);
-        USDC.safeTransferFrom(msg.sender, address(this), usdcAfterFee);
+        // Transfer fee and principal separately
+        USDC.safeTransferFrom(msg.sender, feeRecipient,    fee);
+        USDC.safeTransferFrom(msg.sender, address(this),   usdcAfterFee);
 
+        // Compute shares against pre-deposit rate to protect existing holders
         uint256 supply = totalSupply();
         if (supply == 0) {
             yMinted = usdcAfterFee;
         } else {
+            // Rate now reflects the newly deposited USDC — fair and manipulation-resistant
             uint256 rate = exchangeRate();
             require(rate > 0, "yAPIUSD: invalid rate");
             yMinted = (usdcAfterFee * 1e6) / rate;
         }
 
-        require(yMinted > 0,                          "yAPIUSD: mint too small");
-        require(supply + yMinted <= MAX_TOTAL_SUPPLY,  "yAPIUSD: supply cap");
+        require(yMinted > 0, "yAPIUSD: mint too small");
+        require(supply + yMinted <= MAX_TOTAL_SUPPLY, "yAPIUSD: supply cap");
 
         _mint(msg.sender, yMinted);
         _takeSnapshotIfNeeded();
@@ -171,8 +176,8 @@ contract yAPIUSD is ERC20, Pausable, ReentrancyGuard {
     }
 
     /// @notice Burn yAPIUSD to redeem USDC at the current (appreciated) exchange rate.
-    ///         If the contract has insufficient USDC, harvest() is called automatically.
-    ///         If still insufficient after harvest, reverts — call harvest() first.
+    ///         If the contract's raw USDC balance is insufficient, vault shares are
+    ///         automatically redeemed from the backing vault to cover the shortfall.
     /// @param  yAmount  yAPIUSD to burn.
     /// @return usdcOut  Net USDC returned after fee.
     function redeem(uint256 yAmount)
@@ -181,9 +186,9 @@ contract yAPIUSD is ERC20, Pausable, ReentrancyGuard {
         whenNotPaused
         returns (uint256 usdcOut)
     {
-        require(yAmount > 0,                       "yAPIUSD: zero amount");
-        require(totalSupply() > 0,                 "yAPIUSD: no supply");
-        require(balanceOf(msg.sender) >= yAmount,  "yAPIUSD: insufficient balance");
+        require(yAmount > 0,                         "yAPIUSD: zero amount");
+        require(totalSupply() > 0,                   "yAPIUSD: no supply");
+        require(balanceOf(msg.sender) >= yAmount,    "yAPIUSD: insufficient balance");
 
         uint256 rate      = exchangeRate();
         uint256 usdcGross = (yAmount * rate) / 1e6;
@@ -192,65 +197,68 @@ contract yAPIUSD is ERC20, Pausable, ReentrancyGuard {
         uint256 fee = (usdcGross * FEE_BP) / BP_SCALE;
         usdcOut     = usdcGross - fee;
 
-        // Auto-harvest if USDC balance is insufficient
-        uint256 usdcBal = USDC.balanceOf(address(this));
-        if (usdcGross > usdcBal) {
-            _harvest();
-            usdcBal = USDC.balanceOf(address(this));
+        // Cover any shortfall by redeeming vault shares
+        uint256 usdcBalance = USDC.balanceOf(address(this));
+        if (usdcGross > usdcBalance) {
+            uint256 shortfall = usdcGross - usdcBalance;
+            _redeemVaultSharesForUsdc(shortfall);
         }
 
-        require(
-            usdcBal >= usdcGross,
-            "yAPIUSD: insufficient liquidity, call harvest() first"
-        );
+        require(USDC.balanceOf(address(this)) >= usdcGross, "yAPIUSD: insufficient reserves");
 
         _burn(msg.sender, yAmount);
-        if (fee > 0) USDC.safeTransfer(feeRecipient, fee);
-        USDC.safeTransfer(msg.sender, usdcOut);
+
+        USDC.safeTransfer(feeRecipient, fee);
+        USDC.safeTransfer(msg.sender,   usdcOut);
 
         _takeSnapshotIfNeeded();
         emit Redeem(msg.sender, yAmount, usdcOut, fee);
     }
 
-    /// @notice Treasury: deposit RS tokens to grow the yield engine.
-    ///         RS tokens are permanently locked — they serve as the dividend generator.
-    ///         Depositing more RS tokens increases the rate at which dividends flow in.
-    /// @param  shares  Raw RS tokens to deposit.
-    function depositRS(uint256 shares) external nonReentrant {
-        require(isTreasury[msg.sender], "yAPIUSD: only treasury");
-        require(shares > 0,              "yAPIUSD: zero shares");
+    /// @notice Treasury-only: deposit vault shares to grow the backing pool.
+    ///         As the vault's share price rises, this increases totalAssets and
+    ///         pushes the exchange rate up — this is where yield comes from.
+    /// @param  shares  Amount of vault shares to deposit.
+    function depositVaultShares(uint256 shares) external nonReentrant {
+        require(isTreasury[msg.sender],  "yAPIUSD: only treasury");
+        require(shares > 0,               "yAPIUSD: zero shares");
 
-        IERC20(address(rs)).safeTransferFrom(msg.sender, address(this), shares);
-        rsHeld += shares;
+        uint256 usdcEquivalent = vault.convertToAssets(shares);
+        IERC20(address(vault)).safeTransferFrom(msg.sender, address(this), shares);
 
         _takeSnapshotIfNeeded();
-        emit RSDeposited(msg.sender, shares);
-    }
-
-    /// @notice Permissionless: claim pending USDC dividends from the RS token.
-    ///         USDC flows into the contract, increasing available liquidity
-    ///         (exchange rate is already reflected via exchangeRate()).
-    function harvest() external nonReentrant {
-        uint256 claimed = _harvest();
-        require(claimed > 0, "yAPIUSD: nothing to harvest");
+        emit VaultSharesDeposited(msg.sender, shares, usdcEquivalent);
     }
 
     // =============================================================
-    //                         VIEW FUNCTIONS
+    //                       VIEW FUNCTIONS
     // =============================================================
+
+    /// @notice Total USDC-equivalent backing: raw USDC + vault shares converted to USDC.
+    function totalAssets() public view returns (uint256) {
+        uint256 rawUsdc      = USDC.balanceOf(address(this));
+        uint256 vaultShares  = IERC20(address(vault)).balanceOf(address(this));
+        uint256 sharesAsUsdc = vault.convertToAssets(vaultShares);
+        return rawUsdc + sharesAsUsdc;
+    }
 
     /// @notice Current exchange rate: USDC per yAPIUSD (1e6-scaled).
-    ///         Includes pending unclaimed USDC so the rate is always real-time.
+    ///         Starts at 1e6 (1.0) and increases as API revenue accrues.
     function exchangeRate() public view returns (uint256) {
         uint256 supply = totalSupply();
         if (supply == 0) return 1e6;
-        uint256 usdcBacking = USDC.balanceOf(address(this)) + rs.claimable(address(this));
-        if (usdcBacking == 0) return 1e6;
-        return (usdcBacking * 1e6) / supply;
+        return (totalAssets() * 1e6) / supply;
     }
 
-    function totalAssets() external view returns (uint256) {
-        return USDC.balanceOf(address(this)) + rs.claimable(address(this));
+    function vaultStatus()
+        external
+        view
+        returns (uint256 rawUsdc, uint256 vaultShares, uint256 vaultSharesAsUsdc, uint256 ySupply)
+    {
+        rawUsdc          = USDC.balanceOf(address(this));
+        vaultShares      = IERC20(address(vault)).balanceOf(address(this));
+        vaultSharesAsUsdc = vault.convertToAssets(vaultShares);
+        ySupply          = totalSupply();
     }
 
     function remainingMintable() external view returns (uint256) {
@@ -267,9 +275,7 @@ contract yAPIUSD is ERC20, Pausable, ReentrancyGuard {
         return totalSnapshotCount > MAX_SNAPSHOTS ? MAX_SNAPSHOTS : totalSnapshotCount;
     }
 
-    function getSnapshotFromPast(uint256 snapshotsAgo)
-        external view returns (uint256 rate, uint256 timestamp)
-    {
+    function getSnapshotFromPast(uint256 snapshotsAgo) external view returns (uint256 rate, uint256 timestamp) {
         uint256 available = totalSnapshotCount > MAX_SNAPSHOTS ? MAX_SNAPSHOTS : totalSnapshotCount;
         require(snapshotsAgo < available, "yAPIUSD: snapshot too old");
         uint256 idx = snapshotsAgo <= snapshotIndex
@@ -300,21 +306,26 @@ contract yAPIUSD is ERC20, Pausable, ReentrancyGuard {
     }
 
     // =============================================================
-    //                           INTERNAL
+    //                          INTERNAL
     // =============================================================
 
-    function _harvest() internal returns (uint256 claimed) {
-        claimed = rs.claimable(address(this));
-        if (claimed == 0) return 0;
-        rs.claim();
-        emit Harvested(claimed);
+    /// @dev Redeem vault shares to cover a USDC shortfall during user redemptions.
+    function _redeemVaultSharesForUsdc(uint256 usdcNeeded) internal {
+        uint256 vaultShares = IERC20(address(vault)).balanceOf(address(this));
+        require(vaultShares > 0, "yAPIUSD: no vault shares to redeem");
+
+        // Use vault.withdraw to pull exactly usdcNeeded (ERC4626 handles share math)
+        uint256 maxWithdrawable = vault.maxWithdraw(address(this));
+        uint256 toWithdraw = usdcNeeded > maxWithdrawable ? maxWithdrawable : usdcNeeded;
+
+        vault.withdraw(toWithdraw, address(this), address(this));
     }
 
     function _takeSnapshotIfNeeded() internal {
         if (block.timestamp < lastSnapshotTime + MIN_SNAPSHOT_INTERVAL) return;
         if (totalSupply() == 0) return;
 
-        uint256 rate  = exchangeRate();
+        uint256 rate = exchangeRate();
         snapshotIndex = (snapshotIndex + 1) % MAX_SNAPSHOTS;
         recentSnapshots[snapshotIndex] = RateSnapshot({ rate: rate, timestamp: block.timestamp });
         totalSnapshotCount++;
@@ -332,27 +343,25 @@ contract yAPIUSD is ERC20, Pausable, ReentrancyGuard {
             RateSnapshot memory s = recentSnapshots[idx];
             if (s.timestamp <= targetTs) return (s.rate, s.timestamp);
         }
-        uint256 oldestIdx = totalSnapshotCount > MAX_SNAPSHOTS
-            ? (snapshotIndex + 1) % MAX_SNAPSHOTS
-            : 0;
+        uint256 oldestIdx = totalSnapshotCount > MAX_SNAPSHOTS ? (snapshotIndex + 1) % MAX_SNAPSHOTS : 0;
         RateSnapshot memory oldest = recentSnapshots[oldestIdx];
         return (oldest.rate, oldest.timestamp);
     }
 
     // =============================================================
-    //                             ADMIN
+    //                           ADMIN
     // =============================================================
 
     function addTreasury(address account) external {
-        require(msg.sender == admin,   "yAPIUSD: only admin");
-        require(account != address(0), "yAPIUSD: zero address");
+        require(msg.sender == admin,         "yAPIUSD: only admin");
+        require(account != address(0),        "yAPIUSD: zero address");
         isTreasury[account] = true;
         emit TreasuryUpdated(account, true);
     }
 
     function removeTreasury(address account) external {
-        require(msg.sender == admin,   "yAPIUSD: only admin");
-        require(isTreasury[account],   "yAPIUSD: not a treasury");
+        require(msg.sender == admin,           "yAPIUSD: only admin");
+        require(isTreasury[account],           "yAPIUSD: not a treasury");
         isTreasury[account] = false;
         emit TreasuryUpdated(account, false);
     }
@@ -382,11 +391,11 @@ contract yAPIUSD is ERC20, Pausable, ReentrancyGuard {
     }
 
     function rescueERC20(IERC20 token, address to, uint256 amount) external {
-        require(msg.sender == admin,             "yAPIUSD: only admin");
-        require(address(token) != address(rs),   "yAPIUSD: cannot rescue RS tokens");
-        require(address(token) != address(this), "yAPIUSD: cannot rescue yAPIUSD");
-        require(address(token) != address(USDC), "yAPIUSD: cannot rescue USDC");
-        require(to != address(0),                "yAPIUSD: zero address");
+        require(msg.sender == admin,                      "yAPIUSD: only admin");
+        require(address(token) != address(vault),         "yAPIUSD: cannot rescue vault shares");
+        require(address(token) != address(this),          "yAPIUSD: cannot rescue yAPIUSD");
+        require(address(token) != address(USDC),          "yAPIUSD: cannot rescue USDC");
+        require(to != address(0),                         "yAPIUSD: zero address");
         token.safeTransfer(to, amount);
     }
 }

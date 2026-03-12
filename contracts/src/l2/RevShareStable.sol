@@ -6,29 +6,30 @@ import "@openzeppelin/contracts/token/ERC20/IERC20.sol";
 import "@openzeppelin/contracts/token/ERC20/utils/SafeERC20.sol";
 import "@openzeppelin/contracts/utils/Pausable.sol";
 import "@openzeppelin/contracts/utils/ReentrancyGuard.sol";
-import "@openzeppelin/contracts/interfaces/IERC4626.sol";
+import "../interfaces/IProviderRevenueShare.sol";
 
-/// @title RevShareStable — Pure Vault Share Yield-Bearing Stablecoin
-/// @notice Architecture A: Users deposit ProviderRevenueVault shares directly.
-///         The stablecoin's exchange rate appreciates as API revenue flows into the
-///         backing vault, making every token worth more USDC over time.
+/// @title RevShareStable — RS Token Yield-Bearing Stable
 ///
-/// @dev    Mint:   deposit vault shares → receive RevShareStable at current rate
-///         Redeem: burn RevShareStable  → receive vault shares at current rate
+/// @notice Architecture A — RS-token-native version.
 ///
-///         Exchange rate = vault.convertToAssets(sharesHeld) * 1e6 / totalSupply
-///         Yield source  = vault share price appreciation (from x402 API payments)
+///         Users deposit RS tokens → receive RevShareStable tokens.
+///         RevShareStable tokens represent a claim on BOTH the RS tokens AND their
+///         accumulated USDC dividends. The exchange rate (USDC per stable) starts
+///         at zero and grows as dividends accumulate — it is NOT pegged to 1.0.
 ///
-///         Fees are denominated in vault shares (consistent with in/out token).
-///         Rate snapshots track exchange rate for onchain APR/APY display.
+///         Mint:   deposit RS tokens → receive RevShareStable proportional to
+///                 the current USDC value of those RS tokens.
+///         Redeem: burn RevShareStable → receive pro-rata RS tokens AND
+///                 any harvested USDC dividends for that proportional share.
 ///
-///         Adapted from GLUSD (Galaksio-OS) — same snapshot/APR machinery,
-///         vault shares replace raw USDC as the collateral token.
+/// @dev    Exchange rate = accumulated USDC (claimed + claimable) × 1e6 / stable supply
+///         Yield source  = RS token dividends (from x402 API payments)
+///         Fees          = taken as RS tokens on mint/redeem
 contract RevShareStable is ERC20, Pausable, ReentrancyGuard {
     using SafeERC20 for IERC20;
 
     // =============================================================
-    //                           ROLES
+    //                            ROLES
     // =============================================================
 
     address public admin;
@@ -36,26 +37,35 @@ contract RevShareStable is ERC20, Pausable, ReentrancyGuard {
     address public feeRecipient;
 
     // =============================================================
-    //                        COLLATERAL
+    //                         COLLATERAL
     // =============================================================
 
-    /// @notice The ERC4626 vault whose shares back this stablecoin
-    IERC4626 public immutable vault;
+    /// @notice The RS token that backs this stable
+    IProviderRevenueShare public immutable rs;
 
-    /// @notice Underlying asset of the vault (USDC) — used for decimal reference
+    /// @notice USDC — the dividend token
     IERC20 public immutable USDC;
 
     // =============================================================
-    //                         CONSTANTS
+    //                          CONSTANTS
     // =============================================================
 
-    uint256 public constant FEE_BP       = 50;          // 0.5% on mint and redeem
-    uint256 public constant BP_SCALE     = 10_000;
+    uint256 public constant FEE_BP           = 50;          // 0.5% on mint and redeem
+    uint256 public constant BP_SCALE         = 10_000;
     uint256 public constant MAX_TOTAL_SUPPLY = 1_000_000e6; // 1M cap
 
     // =============================================================
+    //                     ACCUMULATOR STATE
+    // =============================================================
+
+    /// @notice Total RS tokens held by this contract (6 dec raw units)
+    uint256 public rsHeld;
+
+    /// @notice Cumulative USDC claimed from the RS token since contract deployment
+    uint256 public totalClaimedUsdc;
+
+    // =============================================================
     //                     RATE SNAPSHOT SYSTEM
-    //              (adapted from GLUSD by Galaksio-OS)
     // =============================================================
 
     uint256 public constant SECONDS_PER_YEAR      = 365 days;
@@ -63,7 +73,7 @@ contract RevShareStable is ERC20, Pausable, ReentrancyGuard {
     uint256 public constant MAX_SNAPSHOTS          = 2160;
 
     struct RateSnapshot {
-        uint256 rate;      // exchangeRate() at snapshot time (1e6-scaled)
+        uint256 rate;      // exchangeRate() at snapshot (1e6-scaled USDC per stable)
         uint256 timestamp;
     }
 
@@ -73,140 +83,160 @@ contract RevShareStable is ERC20, Pausable, ReentrancyGuard {
     uint256 public lastSnapshotTime;
 
     // =============================================================
-    //                           EVENTS
+    //                            EVENTS
     // =============================================================
 
-    event Mint(address indexed user, uint256 sharesDeposited, uint256 stableMinted, uint256 feeShares);
-    event Redeem(address indexed user, uint256 stableBurned, uint256 sharesReturned, uint256 feeShares);
+    event Mint(address indexed user, uint256 rsDeposited, uint256 stableMinted, uint256 feeRS);
+    event Redeem(address indexed user, uint256 stableBurned, uint256 rsReturned, uint256 usdcReturned, uint256 feeRS);
+    event Harvested(uint256 usdcClaimed);
     event RateSnapshotTaken(uint256 rate, uint256 timestamp);
     event AdminUpdated(address indexed oldAdmin, address indexed newAdmin);
     event PauserUpdated(address indexed oldPauser, address indexed newPauser);
     event FeeRecipientUpdated(address indexed oldRecipient, address indexed newRecipient);
 
     // =============================================================
-    //                         CONSTRUCTOR
+    //                          CONSTRUCTOR
     // =============================================================
 
-    constructor(IERC4626 _vault, address _feeRecipient) ERC20("Revenue Share Stable", "rvsUSD") {
-        require(address(_vault) != address(0), "RSS: zero vault");
-        require(_feeRecipient != address(0), "RSS: zero fee recipient");
+    constructor(
+        IProviderRevenueShare _rs,
+        IERC20 _usdc,
+        address _feeRecipient
+    ) ERC20("Revenue Share Stable", "rvsUSD") {
+        require(address(_rs)   != address(0), "RSS: zero rs");
+        require(address(_usdc) != address(0), "RSS: zero usdc");
+        require(_feeRecipient  != address(0), "RSS: zero fee recipient");
 
-        vault = _vault;
-        USDC = IERC20(_vault.asset());
-        admin = msg.sender;
-        pauser = msg.sender;
+        rs           = _rs;
+        USDC         = _usdc;
+        admin        = msg.sender;
+        pauser       = msg.sender;
         feeRecipient = _feeRecipient;
 
-        uint256 initialRate = _exchangeRate(0, 0);
-        recentSnapshots[0] = RateSnapshot({ rate: initialRate, timestamp: block.timestamp });
+        recentSnapshots[0] = RateSnapshot({ rate: 0, timestamp: block.timestamp });
         totalSnapshotCount = 1;
-        lastSnapshotTime = block.timestamp;
-
-        emit RateSnapshotTaken(initialRate, block.timestamp);
+        lastSnapshotTime   = block.timestamp;
     }
 
-    function decimals() public pure override returns (uint8) {
-        return 6;
-    }
+    function decimals() public pure override returns (uint8) { return 6; }
 
     // =============================================================
-    //                          CORE LOGIC
+    //                           CORE LOGIC
     // =============================================================
 
-    /// @notice Deposit vault shares to mint RevShareStable tokens.
-    /// @param  sharesIn  Amount of vault shares to deposit (includes fee).
-    /// @return stableMinted  Net stable tokens received after fee.
-    function mint(uint256 sharesIn)
+    /// @notice Deposit RS tokens to mint RevShareStable.
+    ///         Minted amount is proportional to the USDC value of the deposited RS tokens
+    ///         relative to the total accumulated USDC backing the current supply.
+    ///         First depositor receives stable tokens equal to the RS tokens deposited.
+    ///
+    /// @param  rsIn  Raw RS tokens to deposit (fee deducted).
+    /// @return stableMinted  Net RevShareStable received.
+    function mint(uint256 rsIn)
         external
         nonReentrant
         whenNotPaused
         returns (uint256 stableMinted)
     {
-        require(sharesIn > 0, "RSS: zero amount");
+        require(rsIn > 0, "RSS: zero amount");
 
-        uint256 feeShares = (sharesIn * FEE_BP) / BP_SCALE;
-        uint256 netShares = sharesIn - feeShares;
+        uint256 feeRS   = (rsIn * FEE_BP) / BP_SCALE;
+        uint256 netRS   = rsIn - feeRS;
 
-        // Compute USDC value of net shares at current vault price
-        uint256 usdcValue = vault.convertToAssets(netShares);
+        // Pull all RS tokens (net to contract, fee to feeRecipient)
+        IERC20(address(rs)).safeTransferFrom(msg.sender, address(this), netRS);
+        if (feeRS > 0) IERC20(address(rs)).safeTransferFrom(msg.sender, feeRecipient, feeRS);
 
-        // Exchange rate BEFORE deposit (avoids inflating against yourself)
         uint256 supply = totalSupply();
         if (supply == 0) {
-            stableMinted = usdcValue;
+            // First depositor: 1:1 in RS token units
+            stableMinted = netRS;
         } else {
-            uint256 rate = exchangeRate();
-            require(rate > 0, "RSS: invalid rate");
-            stableMinted = (usdcValue * 1e6) / rate;
+            // Mint proportional to the USDC value being added vs total backing
+            // Total accumulated USDC backing = claimed + claimable (real-time)
+            uint256 totalBacking = _totalAccumulatedUsdc();
+            require(totalBacking > 0, "RSS: zero backing, redeem first");
+            // USDC value being added ≈ proportional share of future dividends for netRS tokens
+            // We use share proportion: netRS / (rsHeld + netRS) * totalBacking
+            uint256 addedValue = (netRS * totalBacking) / (rsHeld + netRS);
+            stableMinted = (addedValue * supply) / totalBacking;
         }
 
-        require(stableMinted > 0, "RSS: mint too small");
+        require(stableMinted > 0,                          "RSS: mint too small");
         require(supply + stableMinted <= MAX_TOTAL_SUPPLY, "RSS: supply cap");
 
-        // Pull all shares from user — net to contract, fee to feeRecipient
-        IERC20(address(vault)).safeTransferFrom(msg.sender, address(this), netShares);
-        if (feeShares > 0) {
-            IERC20(address(vault)).safeTransferFrom(msg.sender, feeRecipient, feeShares);
-        }
-
+        rsHeld += netRS;
         _mint(msg.sender, stableMinted);
         _takeSnapshotIfNeeded();
 
-        emit Mint(msg.sender, sharesIn, stableMinted, feeShares);
+        emit Mint(msg.sender, rsIn, stableMinted, feeRS);
     }
 
-    /// @notice Burn RevShareStable tokens to redeem underlying vault shares.
-    /// @param  stableAmount  Amount of RevShareStable to burn.
-    /// @return sharesOut  Net vault shares returned after fee.
+    /// @notice Burn RevShareStable to receive proportional RS tokens and USDC dividends.
+    ///
+    ///         Returns:
+    ///         - rsOut:   proportional RS tokens from the locked pool
+    ///         - usdcOut: proportional share of all harvested USDC in this contract
+    ///
+    /// @param  stableAmount  RevShareStable to burn.
     function redeem(uint256 stableAmount)
         external
         nonReentrant
         whenNotPaused
-        returns (uint256 sharesOut)
+        returns (uint256 rsOut, uint256 usdcOut)
     {
-        require(stableAmount > 0, "RSS: zero amount");
-        require(totalSupply() > 0, "RSS: no supply");
-        require(balanceOf(msg.sender) >= stableAmount, "RSS: insufficient balance");
+        require(stableAmount > 0,                          "RSS: zero amount");
+        require(totalSupply() > 0,                         "RSS: no supply");
+        require(balanceOf(msg.sender) >= stableAmount,     "RSS: insufficient balance");
 
-        uint256 rate = exchangeRate();
+        // Harvest pending USDC before computing proportional share
+        _harvest();
 
-        // USDC value owed → convert to gross vault shares
-        uint256 usdcGross = (stableAmount * rate) / 1e6;
-        uint256 sharesGross = vault.convertToShares(usdcGross);
-        require(sharesGross > 0, "RSS: redeem too small");
-        require(sharesGross <= IERC20(address(vault)).balanceOf(address(this)), "RSS: insufficient shares");
+        uint256 supply = totalSupply();
 
-        uint256 feeShares = (sharesGross * FEE_BP) / BP_SCALE;
-        sharesOut = sharesGross - feeShares;
+        // Proportional RS tokens (gross → apply fee)
+        uint256 grossRS = (rsHeld * stableAmount) / supply;
+        uint256 feeRS   = (grossRS * FEE_BP) / BP_SCALE;
+        rsOut           = grossRS - feeRS;
 
+        // Proportional USDC (no additional fee — fee already charged on RS)
+        uint256 usdcBalance = USDC.balanceOf(address(this));
+        usdcOut = (usdcBalance * stableAmount) / supply;
+
+        require(rsOut <= rsHeld, "RSS: insufficient RS");
+
+        rsHeld -= grossRS; // deduct gross (fee goes to feeRecipient, not back to pool)
         _burn(msg.sender, stableAmount);
 
-        IERC20(address(vault)).safeTransfer(msg.sender, sharesOut);
-        if (feeShares > 0) {
-            IERC20(address(vault)).safeTransfer(feeRecipient, feeShares);
-        }
+        if (rsOut > 0)    IERC20(address(rs)).safeTransfer(msg.sender, rsOut);
+        if (feeRS > 0)    IERC20(address(rs)).safeTransfer(feeRecipient, feeRS);
+        if (usdcOut > 0)  USDC.safeTransfer(msg.sender, usdcOut);
 
         _takeSnapshotIfNeeded();
-        emit Redeem(msg.sender, stableAmount, sharesOut, feeShares);
+        emit Redeem(msg.sender, stableAmount, rsOut, usdcOut, feeRS);
+    }
+
+    /// @notice Permissionless: claim pending USDC dividends from the RS token.
+    function harvest() external nonReentrant {
+        uint256 claimed = _harvest();
+        require(claimed > 0, "RSS: nothing to harvest");
     }
 
     // =============================================================
-    //                       VIEW FUNCTIONS
+    //                        VIEW FUNCTIONS
     // =============================================================
 
-    /// @notice Current exchange rate: USDC value per RevShareStable (1e6-scaled).
-    ///         Starts at 1e6 (1.0) and increases as API revenue accrues to the vault.
+    /// @notice Current USDC backing: claimed USDC in contract + pending claimable.
+    function totalAccumulatedUsdc() external view returns (uint256) {
+        return _totalAccumulatedUsdc();
+    }
+
+    /// @notice Exchange rate: USDC value per RevShareStable (1e6-scaled).
+    ///         Starts at 0 and grows as dividends accumulate — NOT pegged at 1.0.
     function exchangeRate() public view returns (uint256) {
-        return _exchangeRate(
-            IERC20(address(vault)).balanceOf(address(this)),
-            totalSupply()
-        );
-    }
-
-    function vaultStatus() external view returns (uint256 sharesHeld, uint256 usdcValue, uint256 supply) {
-        sharesHeld = IERC20(address(vault)).balanceOf(address(this));
-        usdcValue  = vault.convertToAssets(sharesHeld);
-        supply     = totalSupply();
+        uint256 supply = totalSupply();
+        if (supply == 0) return 0;
+        uint256 backing = _totalAccumulatedUsdc();
+        return (backing * 1e6) / supply;
     }
 
     function remainingMintable() external view returns (uint256) {
@@ -223,7 +253,9 @@ contract RevShareStable is ERC20, Pausable, ReentrancyGuard {
         return totalSnapshotCount > MAX_SNAPSHOTS ? MAX_SNAPSHOTS : totalSnapshotCount;
     }
 
-    function getSnapshotFromPast(uint256 snapshotsAgo) external view returns (uint256 rate, uint256 timestamp) {
+    function getSnapshotFromPast(uint256 snapshotsAgo)
+        external view returns (uint256 rate, uint256 timestamp)
+    {
         uint256 available = totalSnapshotCount > MAX_SNAPSHOTS ? MAX_SNAPSHOTS : totalSnapshotCount;
         require(snapshotsAgo < available, "RSS: snapshot too old");
         uint256 idx = snapshotsAgo <= snapshotIndex
@@ -233,14 +265,12 @@ contract RevShareStable is ERC20, Pausable, ReentrancyGuard {
         return (s.rate, s.timestamp);
     }
 
-    /// @notice Annualized yield of the backing vault over the past N days.
-    ///         Denominated in 1e8-scaled BP (500000 = 5.00% APR).
     function calculateAPR(uint256 daysAgo) external view returns (uint256 apr) {
         require(daysAgo > 0 && daysAgo <= 90, "RSS: invalid range");
-        require(totalSnapshotCount > 0, "RSS: no history");
+        require(totalSnapshotCount > 0,        "RSS: no history");
 
         uint256 currentRate = exchangeRate();
-        uint256 targetTs = block.timestamp - (daysAgo * 1 days);
+        uint256 targetTs    = block.timestamp - (daysAgo * 1 days);
         (uint256 oldRate, uint256 oldTs) = _findSnapshot(targetTs);
 
         uint256 elapsed = block.timestamp - oldTs;
@@ -256,20 +286,27 @@ contract RevShareStable is ERC20, Pausable, ReentrancyGuard {
     }
 
     // =============================================================
-    //                        INTERNAL
+    //                           INTERNAL
     // =============================================================
 
-    function _exchangeRate(uint256 sharesHeld, uint256 supply) internal view returns (uint256) {
-        if (supply == 0) return 1e6;
-        uint256 usdcValue = vault.convertToAssets(sharesHeld);
-        return (usdcValue * 1e6) / supply;
+    /// @dev Total USDC backing = USDC already in contract + pending claimable.
+    function _totalAccumulatedUsdc() internal view returns (uint256) {
+        return USDC.balanceOf(address(this)) + rs.claimable(address(this));
+    }
+
+    function _harvest() internal returns (uint256 claimed) {
+        claimed = rs.claimable(address(this));
+        if (claimed == 0) return 0;
+        rs.claim();
+        totalClaimedUsdc += claimed;
+        emit Harvested(claimed);
     }
 
     function _takeSnapshotIfNeeded() internal {
         if (block.timestamp < lastSnapshotTime + MIN_SNAPSHOT_INTERVAL) return;
         if (totalSupply() == 0) return;
 
-        uint256 rate = exchangeRate();
+        uint256 rate  = exchangeRate();
         snapshotIndex = (snapshotIndex + 1) % MAX_SNAPSHOTS;
         recentSnapshots[snapshotIndex] = RateSnapshot({ rate: rate, timestamp: block.timestamp });
         totalSnapshotCount++;
@@ -285,18 +322,17 @@ contract RevShareStable is ERC20, Pausable, ReentrancyGuard {
                 ? snapshotIndex - i
                 : MAX_SNAPSHOTS - (i - snapshotIndex);
             RateSnapshot memory s = recentSnapshots[idx];
-            if (s.timestamp <= targetTs) {
-                return (s.rate, s.timestamp);
-            }
+            if (s.timestamp <= targetTs) return (s.rate, s.timestamp);
         }
-        // Fallback: oldest snapshot
-        uint256 oldestIdx = totalSnapshotCount > MAX_SNAPSHOTS ? (snapshotIndex + 1) % MAX_SNAPSHOTS : 0;
+        uint256 oldestIdx = totalSnapshotCount > MAX_SNAPSHOTS
+            ? (snapshotIndex + 1) % MAX_SNAPSHOTS
+            : 0;
         RateSnapshot memory oldest = recentSnapshots[oldestIdx];
         return (oldest.rate, oldest.timestamp);
     }
 
     // =============================================================
-    //                           ADMIN
+    //                             ADMIN
     // =============================================================
 
     function pause()   external { require(msg.sender == pauser, "RSS: only pauser"); _pause(); }
@@ -324,10 +360,10 @@ contract RevShareStable is ERC20, Pausable, ReentrancyGuard {
     }
 
     function rescueERC20(IERC20 token, address to, uint256 amount) external {
-        require(msg.sender == admin, "RSS: only admin");
-        require(address(token) != address(vault), "RSS: cannot rescue vault shares");
-        require(address(token) != address(this),  "RSS: cannot rescue stable");
-        require(to != address(0), "RSS: zero address");
+        require(msg.sender == admin,             "RSS: only admin");
+        require(address(token) != address(rs),   "RSS: cannot rescue RS tokens");
+        require(address(token) != address(this), "RSS: cannot rescue stable");
+        require(to != address(0),                "RSS: zero address");
         token.safeTransfer(to, amount);
     }
 }

@@ -576,14 +576,6 @@ def cmd_splitter(args):
     v_bp    = s.functions.vaultBp().call()
     pending = s.functions.pendingDistribution().call()
 
-    vault_contract = _client.w3.eth.contract(
-        address=_client.w3.to_checksum_address(vault), abi=_vault_abi
-    )
-    v_supply = vault_contract.functions.totalSupply().call()
-    v_assets = vault_contract.functions.totalAssets().call()
-    v_deps   = vault_contract.functions.depositsEnabled().call()
-    v_gen    = vault_contract.functions.genesisComplete().call()
-
     print(f"\n── Splitter {addr} ──────────────────────────────────────")
     print(f"  protocolTreasury  : {pt}  ({pt_bp / 100:.2f}%)")
     print(f"  providerTreasury  : {prov}  ({prov_bp / 100:.2f}%)")
@@ -591,16 +583,62 @@ def cmd_splitter(args):
     print(f"  vault             : {vault}  ({v_bp / 100:.2f}%)")
     print(f"  pending           : {pending / 1e6:.6f} USDC")
 
-    print(f"\n── Vault {vault} ──────────────────────────────────────")
-    print(f"  totalSupply       : {v_supply / 1e6:.6f} shares")
-    print(f"  totalAssets       : {v_assets / 1e6:.6f} USDC")
-    if v_supply:
-        print(f"  sharePrice        : {(v_assets * 1e18 // v_supply) / 1e18:.8f} USDC/share")
-    else:
-        print(f"  sharePrice        : n/a")
-    print(f"  depositsEnabled   : {v_deps}")
-    print(f"  genesisComplete   : {v_gen}")
-    print("────────────────────────────────────────────────────────────────────\n")
+    if vault != ZERO:
+        vault_contract = _client.w3.eth.contract(
+            address=_client.w3.to_checksum_address(vault), abi=_vault_abi
+        )
+
+        v_supply = vault_contract.functions.totalSupply().call()
+        v_assets = vault_contract.functions.totalAssets().call()
+        v_deps   = vault_contract.functions.depositsEnabled().call()
+        v_gen    = vault_contract.functions.genesisComplete().call()
+
+        print(f"\n── Vault {vault} ──────────────────────────────────────")
+        print(f"  totalSupply       : {v_supply / 1e6:.6f} shares")
+        print(f"  totalAssets       : {v_assets / 1e6:.6f} USDC")
+        if v_supply:
+            print(f"  sharePrice        : {(v_assets * 1e18 // v_supply) / 1e18:.8f} USDC/share")
+        else:
+            print(f"  sharePrice        : n/a")
+        print(f"  depositsEnabled   : {v_deps}")
+        print(f"  genesisComplete   : {v_gen}")
+        print("────────────────────────────────────────────────────────────────────\n")
+
+    if rs != ZERO:
+        rs_contract   = _client.w3.eth.contract(address=_client.w3.to_checksum_address(rs), abi=_rs_abi)
+
+        name         = rs_contract.functions.name().call()
+        symbol       = rs_contract.functions.symbol().call()
+        owner        = rs_contract.functions.owner().call()
+        genesis      = rs_contract.functions.genesisComplete().call()
+        supply       = rs_contract.functions.totalSupply().call()
+        total_dist   = rs_contract.functions.totalDistributed().call()
+        total_claimed = rs_contract.functions.totalClaimed().call()
+        total_pending = rs_contract.functions.totalPending().call()
+        eps          = rs_contract.functions.cumulativeRevenuePerShare().call()
+        my_shares    = rs_contract.functions.balanceOf(_client.account.address).call()
+        claimable    = rs_contract.functions.claimable(_client.account.address).call()
+
+        try:
+            apr7d, apr30d = rs_contract.functions.getCurrentAPRs().call()
+        except Exception:
+            apr7d, apr30d = 0, 0
+
+        print(f"\n── Revenue Share {addr} ───────────────────────────────")
+        print(f"  name           : {name} ({symbol})")
+        print(f"  owner          : {owner}")
+        print(f"  genesisComplete: {genesis}")
+        print(f"  totalSupply    : {supply / 1e6:.6f} shares")
+        print(f"  totalDistrib   : {total_dist / 1e6:.6f} USDC")
+        print(f"  totalClaimed   : {total_claimed / 1e6:.6f} USDC")
+        print(f"  unclaimed pool : {total_pending / 1e6:.6f} USDC")
+        print(f"  EPS (lifetime) : {eps / 1e6:.6f} USDC/share")
+        if apr7d or apr30d:
+            print(f"  APR (7d)       : {apr7d / 1e6:.4f}%")
+            print(f"  APR (30d)      : {apr30d / 1e6:.4f}%")
+        print(f"\n  your shares    : {my_shares / 1e6:.6f}")
+        print(f"  claimable      : {claimable / 1e6:.6f} USDC")
+        print("────────────────────────────────────────────────────────────────────")
 
     if args.distribute:
         if pending == 0:

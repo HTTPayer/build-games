@@ -329,7 +329,16 @@ uv run streamlit run analytics_dashboard.py
 
 See `docs/analytics.md` for full details and API reference.
 
-### 5. Simulate the CRE workflow manually
+### 5. Settle challenges via CRE
+
+The `cre_watcher.py` automatically detects `ChallengeOpened` events and runs the CRE workflow to settle them — no manual intervention needed.
+
+```bash
+cd contracts/scripts
+uv run python cre_watcher.py
+```
+
+To trigger the CRE workflow manually for a specific challenge:
 
 ```bash
 cd cre
@@ -363,7 +372,7 @@ See `cre/README.md` for the full CRE setup guide.
 | Analytics indexer | Complete (`contracts/scripts/analytics_indexer.py`) |
 | Analytics API | Complete (`contracts/scripts/analytics_api.py`) |
 | Analytics dashboard | Complete (`contracts/scripts/analytics_dashboard.py`) |
-| Frontend app | Planned |
+| Frontend app | Complete — live at [composed.httpayer.com](https://composed.httpayer.com/) |
 
 ---
 

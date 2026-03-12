@@ -4,33 +4,34 @@ pragma solidity 0.8.30;
 import "@openzeppelin/contracts/token/ERC20/utils/SafeERC20.sol";
 import "@openzeppelin/contracts/token/ERC20/IERC20.sol";
 import "@openzeppelin/contracts/utils/ReentrancyGuard.sol";
-
-interface IProviderRevenueShare {
-    /// @notice Credit any USDC already transferred to the contract since last distribution.
-    function distribute() external;
-}
+import "./interfaces/IProviderRevenueShare.sol";
 
 /**
  * @title ProviderRevenueSplitter
- * @notice Routes x402 API payment revenue (USDC) across four recipients:
- *         protocol treasury, optional provider treasury, optional revenue share
- *         contract, and the revenue vault.
+ * @notice Routes x402 API payment revenue (USDC) across three recipients:
+ *         protocol treasury, provider treasury, and the ProviderRevenueShare
+ *         dividend accumulator.
  *
- * @dev    Split configuration (all immutable after deployment):
+ * @dev    Split configuration:
  *
- *           protocolTreasuryBp   →  protocol treasury    (USDC, required)
- *           providerTreasuryBp   →  provider treasury    (USDC, optional)
- *           revenueShareBp       →  ProviderRevenueShare (dividends, optional)
- *           vaultBp              →  ProviderRevenueVault (computed remainder)
+ *           protocolTreasuryBp   →  protocol treasury    (USDC)
+ *           providerTreasuryBp   →  provider treasury    (USDC)
+ *           revenueShareBp       →  ProviderRevenueShare (dividends)
  *
- *         Constraint: protocolBp + providerBp + revenueShareBp < BP_SCALE
+ *         Constraint: protocolBp + providerBp + revenueShareBp == BP_SCALE (10_000).
+ *         All basis points are immutable after deployment — a trust guarantee to RS holders
+ *         that their dividend allocation can never be changed unilaterally.
  *
- *         Revenue sent to the vault is a direct USDC transfer — NOT a vault.deposit().
- *         This increases the vault's totalAssets() without minting new shares, so
- *         existing share prices rise with each distribution.
+ *         Treasury addresses are mutable for operational reasons (wallet rotation, multisig
+ *         upgrades) but carry no economic impact — they only redirect where USDC lands,
+ *         not how much each recipient receives.
  *
- *         Revenue sent to the revenue share contract is a direct USDC transfer followed
- *         by a call to IProviderRevenueShare.distribute(), which credits the accumulator.
+ *         revenueShare is immutable — dividend rights cannot be redirected.
+ *
+ *         Revenue sent to the RS contract is a direct USDC transfer followed by a call to
+ *         IProviderRevenueShare.distribute(), which credits the per-share accumulator.
+ *         If distribute() reverts, USDC is safe in the RS contract and will be picked up
+ *         on the next successful call (balance-sniffing pattern).
  *
  *         Anyone can call distribute() — permissionless, no funds can be stuck.
  *         The contract is stateless; every distribute() drains the full USDC balance.
@@ -50,28 +51,34 @@ contract ProviderRevenueSplitter is ReentrancyGuard {
 
     IERC20 public immutable USDC;
 
-    /// @notice Protocol treasury — receives protocolTreasuryBp of every distribution.
-    address public immutable protocolTreasury;
-
-    /// @notice Provider treasury — receives providerTreasuryBp of every distribution.
-    ///         address(0) when providerTreasuryBp == 0.
-    address public immutable providerTreasury;
-
     /// @notice ProviderRevenueShare — receives revenueShareBp as dividends.
-    ///         address(0) when revenueShareBp == 0.
+    ///         address(0) only when revenueShareBp == 0.
+    ///         Immutable — dividend destination cannot be changed after deployment.
     IProviderRevenueShare public immutable revenueShare;
 
-    /// @notice The ProviderRevenueVault — receives the computed vaultBp remainder.
-    address public immutable vault;
+    /// @notice Who can update protocolTreasury (set once at deployment).
+    address public immutable protocolAdmin;
 
+    /// @notice Basis points allocated to each recipient (immutable).
     uint256 public immutable protocolTreasuryBp;
     uint256 public immutable providerTreasuryBp;
     uint256 public immutable revenueShareBp;
 
-    /// @notice Vault's share of each distribution (remainder after all other cuts).
-    function vaultBp() public view returns (uint256) {
-        return BP_SCALE - protocolTreasuryBp - providerTreasuryBp - revenueShareBp;
-    }
+    // =============================================================
+    //                           STATE
+    // =============================================================
+
+    /// @notice Protocol treasury — receives protocolTreasuryBp of every distribution.
+    ///         Mutable by protocolAdmin (treasury rotations, multisig upgrades).
+    address public protocolTreasury;
+
+    /// @notice Provider treasury — receives providerTreasuryBp of every distribution.
+    ///         Mutable by providerAdmin (wallet rotations, multisig upgrades).
+    ///         address(0) when providerTreasuryBp == 0.
+    address public providerTreasury;
+
+    /// @notice Who can update providerTreasury and transfer providerAdmin rights.
+    address public providerAdmin;
 
     // =============================================================
     //                           EVENTS
@@ -81,15 +88,17 @@ contract ProviderRevenueSplitter is ReentrancyGuard {
         uint256 totalAmount,
         uint256 protocolAmount,
         uint256 providerAmount,
-        uint256 revenueShareAmount,
-        uint256 vaultAmount
+        uint256 revenueShareAmount
     );
 
     /// @notice Emitted when revenueShare.distribute() reverts after USDC has already
-    ///         been transferred. The USDC is safe inside the revenueShare contract and
-    ///         will be credited automatically on the next successful distribute() call
-    ///         (balance-sniffing pattern picks up the accumulated amount).
+    ///         been transferred. The USDC is safe inside the RS contract and will be
+    ///         credited on the next successful distribute() call.
     event RevenueShareDistributeFailed(uint256 amount);
+
+    event ProtocolTreasuryUpdated(address indexed oldTreasury, address indexed newTreasury);
+    event ProviderTreasuryUpdated(address indexed oldTreasury, address indexed newTreasury);
+    event ProviderAdminTransferred(address indexed oldAdmin, address indexed newAdmin);
 
     // =============================================================
     //                         CONSTRUCTOR
@@ -97,54 +106,54 @@ contract ProviderRevenueSplitter is ReentrancyGuard {
 
     /**
      * @param _usdc                 USDC token address.
-     * @param _protocolTreasury     Protocol treasury address (required).
+     * @param _protocolAdmin        Address allowed to update protocolTreasury.
+     * @param _protocolTreasury     Initial protocol treasury address.
      * @param _protocolTreasuryBp   Protocol cut in basis points.
-     * @param _providerTreasury     Provider treasury address. Use address(0) if bp == 0.
+     * @param _providerAdmin        Address allowed to update providerTreasury and transfer admin.
+     * @param _providerTreasury     Initial provider treasury address. Use address(0) if bp == 0.
      * @param _providerTreasuryBp   Provider cut in basis points.
      * @param _revenueShare         ProviderRevenueShare address. Use address(0) if bp == 0.
      * @param _revenueShareBp       Revenue share cut in basis points.
-     * @param _vault                ProviderRevenueVault address.
+     *
+     * @dev   Constraint: _protocolTreasuryBp + _providerTreasuryBp + _revenueShareBp == BP_SCALE.
      */
     constructor(
         IERC20                _usdc,
+        address               _protocolAdmin,
         address               _protocolTreasury,
         uint256               _protocolTreasuryBp,
+        address               _providerAdmin,
         address               _providerTreasury,
         uint256               _providerTreasuryBp,
         IProviderRevenueShare _revenueShare,
-        uint256               _revenueShareBp,
-        address               _vault
+        uint256               _revenueShareBp
     ) {
-        uint256 _totalBp = _protocolTreasuryBp + _providerTreasuryBp + _revenueShareBp;
-
-        require(address(_usdc)    != address(0), "USDC zero");
-        require(_protocolTreasury != address(0), "protocol treasury zero");
-        require(_totalBp <= BP_SCALE,            "bp exceeds 100%");
+        require(address(_usdc)     != address(0), "USDC zero");
+        require(_protocolAdmin     != address(0), "protocol admin zero");
+        require(_protocolTreasury  != address(0), "protocol treasury zero");
+        require(_providerAdmin     != address(0), "provider admin zero");
         require(
-            _vault != address(0) || _totalBp == BP_SCALE,
-            "vault required unless all bp is accounted for"
-        );
-        require(
-            address(_revenueShare) != address(0) || _vault != address(0),
-            "at least one of vault or revenueShare must receive revenue"
+            _protocolTreasuryBp + _providerTreasuryBp + _revenueShareBp == BP_SCALE,
+            "bp must sum to 100%"
         );
         require(
             _providerTreasuryBp == 0 || _providerTreasury != address(0),
-            "provider treasury address required when bp > 0"
+            "provider treasury required when bp > 0"
         );
         require(
             _revenueShareBp == 0 || address(_revenueShare) != address(0),
-            "revenue share address required when bp > 0"
+            "revenueShare required when bp > 0"
         );
 
         USDC               = _usdc;
+        protocolAdmin      = _protocolAdmin;
         protocolTreasury   = _protocolTreasury;
         protocolTreasuryBp = _protocolTreasuryBp;
+        providerAdmin      = _providerAdmin;
         providerTreasury   = _providerTreasury;
         providerTreasuryBp = _providerTreasuryBp;
         revenueShare       = _revenueShare;
         revenueShareBp     = _revenueShareBp;
-        vault              = _vault;
     }
 
     // =============================================================
@@ -153,10 +162,8 @@ contract ProviderRevenueSplitter is ReentrancyGuard {
 
     /**
      * @notice Distribute the contract's entire USDC balance across all recipients.
-     *         Anyone may call. Vault portion is transferred directly (not deposited),
-     *         causing existing vault shares to appreciate without new shares being minted.
-     *         Revenue share portion is transferred then distribute() is called on the
-     *         contract, crediting the per-share accumulator for dividend holders.
+     *         Anyone may call. Revenue share portion is transferred then distribute()
+     *         is called on the RS contract, crediting the per-share accumulator.
      */
     function distribute() external nonReentrant {
         uint256 balance = USDC.balanceOf(address(this));
@@ -164,8 +171,7 @@ contract ProviderRevenueSplitter is ReentrancyGuard {
 
         uint256 protocolAmount     = (balance * protocolTreasuryBp) / BP_SCALE;
         uint256 providerAmount     = (balance * providerTreasuryBp) / BP_SCALE;
-        uint256 revenueShareAmount = (balance * revenueShareBp)     / BP_SCALE;
-        uint256 vaultAmount        = balance - protocolAmount - providerAmount - revenueShareAmount; // dust-safe
+        uint256 revenueShareAmount = balance - protocolAmount - providerAmount; // dust-safe
 
         if (protocolAmount > 0) {
             USDC.safeTransfer(protocolTreasury, protocolAmount);
@@ -176,26 +182,47 @@ contract ProviderRevenueSplitter is ReentrancyGuard {
         }
 
         if (revenueShareAmount > 0) {
-            // Transfer USDC first — funds are safe in the revenueShare contract
-            // regardless of whether the distribute() notification succeeds.
+            // Transfer USDC first — funds are safe in the RS contract regardless of
+            // whether the distribute() notification succeeds.
             USDC.safeTransfer(address(revenueShare), revenueShareAmount);
 
-            // Notify the accumulator. If this reverts (e.g. revenueShare is paused or
-            // has a temporary issue), the USDC is not lost — the balance-sniffing
-            // pattern in revenueShare.distribute() will pick up the accumulated amount
-            // on the next successful call. We emit an event so it's detectable offchain.
+            // Notify the accumulator. If this reverts, USDC is not lost — the
+            // balance-sniffing pattern in revenueShare.distribute() picks up the
+            // accumulated amount on the next successful call.
             try revenueShare.distribute() {} catch {
                 emit RevenueShareDistributeFailed(revenueShareAmount);
             }
         }
 
-        if (vaultAmount > 0 && vault != address(0)) {
-            // Direct transfer — increases vault.totalAssets() and share price
-            // without minting new shares.
-            USDC.safeTransfer(vault, vaultAmount);
-        }
+        emit Distributed(balance, protocolAmount, providerAmount, revenueShareAmount);
+    }
 
-        emit Distributed(balance, protocolAmount, providerAmount, revenueShareAmount, vaultAmount);
+    // =============================================================
+    //                     TREASURY MANAGEMENT
+    // =============================================================
+
+    /// @notice Update the protocol treasury address. Only callable by protocolAdmin.
+    function setProtocolTreasury(address newTreasury) external {
+        require(msg.sender == protocolAdmin,  "not protocol admin");
+        require(newTreasury != address(0),    "zero address");
+        emit ProtocolTreasuryUpdated(protocolTreasury, newTreasury);
+        protocolTreasury = newTreasury;
+    }
+
+    /// @notice Update the provider treasury address. Only callable by providerAdmin.
+    function setProviderTreasury(address newTreasury) external {
+        require(msg.sender == providerAdmin,  "not provider admin");
+        require(newTreasury != address(0) || providerTreasuryBp == 0, "zero address");
+        emit ProviderTreasuryUpdated(providerTreasury, newTreasury);
+        providerTreasury = newTreasury;
+    }
+
+    /// @notice Transfer providerAdmin rights to a new address. Only callable by current providerAdmin.
+    function transferProviderAdmin(address newAdmin) external {
+        require(msg.sender == providerAdmin, "not provider admin");
+        require(newAdmin != address(0),      "zero address");
+        emit ProviderAdminTransferred(providerAdmin, newAdmin);
+        providerAdmin = newAdmin;
     }
 
     // =============================================================
@@ -217,9 +244,7 @@ contract ProviderRevenueSplitter is ReentrancyGuard {
             address _providerTreasury,
             uint256 _providerTreasuryBp,
             address _revenueShare,
-            uint256 _revenueShareBp,
-            address _vault,
-            uint256 _vaultBp
+            uint256 _revenueShareBp
         )
     {
         return (
@@ -228,9 +253,7 @@ contract ProviderRevenueSplitter is ReentrancyGuard {
             providerTreasury,
             providerTreasuryBp,
             address(revenueShare),
-            revenueShareBp,
-            vault,
-            vaultBp()
+            revenueShareBp
         );
     }
 }

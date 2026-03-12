@@ -5,143 +5,156 @@ import "@openzeppelin/contracts/token/ERC20/ERC20.sol";
 import "@openzeppelin/contracts/token/ERC20/IERC20.sol";
 import "@openzeppelin/contracts/token/ERC20/utils/SafeERC20.sol";
 import "@openzeppelin/contracts/utils/ReentrancyGuard.sol";
-import "@openzeppelin/contracts/interfaces/IERC4626.sol";
+import "../interfaces/IProviderRevenueShare.sol";
 
-/// @title APIYieldIndex
-/// @notice A weighted basket of ProviderRevenueVault shares, tradable as a single ERC-20.
-///         Holding one index token gives you diversified exposure to multiple API cash flows.
-///         As each component API earns revenue, its vault share price rises, automatically
-///         appreciating the index value — no rebalancing or manual compounding required.
+/// @title APIYieldIndex — Weighted Basket of RS Tokens
 ///
-/// @dev    Architecture:
-///         - Admin registers up to MAX_COMPONENTS vaults with basis-point weights (sum = 10,000)
-///         - Users deposit each component's vault shares in proportion to the current weights
-///         - Index tokens are minted proportional to the USDC value added vs total index value
-///         - Redemption burns index tokens and returns pro-rata of every component
-///         - Index value = Σ vault_i.convertToAssets(sharesHeld_i) / indexSupply
+/// @notice A diversified index of ProviderRevenueShare tokens from multiple APIs.
+///         Holding one index token gives exposure to multiple API revenue streams.
+///         As each component earns dividends, the index value grows — no rebalancing needed.
 ///
-///         Deposit flow (user perspective):
-///           1. Approve each component vault share for this contract
-///           2. Call quote(usdcTarget) to get required share amounts per component
-///           3. Call deposit(sharesIn[]) — contract pulls exactly those shares
+/// @dev    Architecture (RS-token-native):
+///         - Admin registers up to MAX_COMPONENTS RS tokens with basis-point weights (sum = 10,000)
+///         - Index value = Σ dividends earned by each component (claimed + claimable)
+///         - Users deposit proportional RS tokens → get index tokens
+///         - Redeem: receive proportional RS tokens from each component + share of harvested USDC
 ///
-///         Composable as DeFi collateral: the index token is a standard ERC-20 whose
-///         backing value is verifiable onchain at any time via indexValue().
+///         MasterChef accumulator tracks total harvested USDC across all components.
+///         Per-component claimable adds real-time pending dividends to index value.
 ///
-///         The index turns API usage into an index asset class — a single token that
-///         tracks the yield performance of Avalanche's API economy.
+///         Deposit flow:
+///           1. Call quote(usdcTarget) to get required RS amounts per component
+///           2. Approve each RS token
+///           3. Call deposit(rsAmounts[])
 contract APIYieldIndex is ERC20, ReentrancyGuard {
     using SafeERC20 for IERC20;
 
     // =============================================================
-    //                          CONFIG
+    //                           CONFIG
     // =============================================================
 
     uint256 public constant MAX_COMPONENTS = 10;
     uint256 public constant BP_SCALE       = 10_000;
-    uint256 public constant FEE_BP         = 25;    // 0.25% on deposit and redeem
+    uint256 public constant FEE_BP         = 25;        // 0.25% on deposit and redeem
     uint256 public constant MAX_SUPPLY     = 1_000_000e6;
 
     address public admin;
 
     // =============================================================
-    //                         COMPONENTS
+    //                          COMPONENTS
     // =============================================================
 
     struct Component {
-        IERC4626 vault;
-        uint256  weightBp; // weight in basis points; all weights must sum to BP_SCALE
-        string   name;     // human-readable label (e.g., "AI Inference API")
+        IProviderRevenueShare rs;
+        uint256 weightBp;  // basis point weight; all weights must sum to BP_SCALE
+        string  name;      // human-readable label (e.g., "AI Inference API")
     }
 
     Component[] public components;
 
     // =============================================================
-    //                           EVENTS
+    //                      USDC ACCUMULATOR
     // =============================================================
 
-    event ComponentAdded(uint256 indexed id, address vault, uint256 weightBp, string name);
+    /// @notice Total USDC harvested across all components and stored in this contract
+    uint256 public totalHarvestedUsdc;
+
+    /// @notice USDC token (shared across all RS tokens — they all distribute the same USDC)
+    IERC20 public immutable USDC;
+
+    // =============================================================
+    //                            EVENTS
+    // =============================================================
+
+    event ComponentAdded(uint256 indexed id, address rs, uint256 weightBp, string name);
     event ComponentWeightUpdated(uint256 indexed id, uint256 newWeightBp);
-    event Deposited(address indexed user, uint256[] sharesIn, uint256 indexMinted, uint256 usdcValue);
-    event Redeemed(address indexed user, uint256 indexBurned, uint256[] sharesOut, uint256 usdcValue);
+    event Deposited(address indexed user, uint256[] rsAmountsIn, uint256 indexMinted, uint256 usdcValue);
+    event Redeemed(address indexed user, uint256 indexBurned, uint256[] rsAmountsOut, uint256 usdcReturned);
+    event Harvested(uint256 usdcClaimed);
     event AdminUpdated(address indexed oldAdmin, address indexed newAdmin);
 
     // =============================================================
-    //                         CONSTRUCTOR
+    //                          CONSTRUCTOR
     // =============================================================
 
-    constructor(string memory _name, string memory _symbol) ERC20(_name, _symbol) {
+    constructor(IERC20 _usdc, string memory _name, string memory _symbol)
+        ERC20(_name, _symbol)
+    {
+        require(address(_usdc) != address(0), "Index: zero usdc");
+        USDC  = _usdc;
         admin = msg.sender;
     }
 
     function decimals() public pure override returns (uint8) { return 6; }
 
     // =============================================================
-    //                    COMPONENT MANAGEMENT
+    //                     COMPONENT MANAGEMENT
     // =============================================================
 
-    /// @notice Register a new vault component.
+    /// @notice Register a new RS token component.
     ///         After adding all components, weights must sum to BP_SCALE.
-    function addComponent(IERC4626 _vault, uint256 _weightBp, string calldata _name) external {
-        require(msg.sender == admin,             "Index: only admin");
-        require(address(_vault) != address(0),   "Index: zero vault");
-        require(_weightBp > 0,                   "Index: zero weight");
+    function addComponent(
+        IProviderRevenueShare _rs,
+        uint256 _weightBp,
+        string calldata _name
+    ) external {
+        require(msg.sender == admin,              "Index: only admin");
+        require(address(_rs) != address(0),       "Index: zero rs");
+        require(_weightBp > 0,                    "Index: zero weight");
         require(components.length < MAX_COMPONENTS, "Index: too many components");
 
-        // Ensure no duplicate vaults
         for (uint256 i = 0; i < components.length; i++) {
-            require(address(components[i].vault) != address(_vault), "Index: duplicate vault");
+            require(address(components[i].rs) != address(_rs), "Index: duplicate rs");
         }
 
-        components.push(Component({ vault: _vault, weightBp: _weightBp, name: _name }));
-        emit ComponentAdded(components.length - 1, address(_vault), _weightBp, _name);
+        components.push(Component({ rs: _rs, weightBp: _weightBp, name: _name }));
+        emit ComponentAdded(components.length - 1, address(_rs), _weightBp, _name);
     }
 
-    /// @notice Update a component's weight. All weights must still sum to BP_SCALE after update.
+    /// @notice Update a component's weight. All weights must sum to BP_SCALE.
     function updateWeight(uint256 id, uint256 newWeightBp) external {
-        require(msg.sender == admin,  "Index: only admin");
+        require(msg.sender == admin,   "Index: only admin");
         require(id < components.length, "Index: invalid id");
         components[id].weightBp = newWeightBp;
-        require(_weightsValid(),      "Index: weights must sum to BP_SCALE");
+        require(_weightsValid(),       "Index: weights must sum to BP_SCALE");
         emit ComponentWeightUpdated(id, newWeightBp);
     }
 
-    function componentCount() external view returns (uint256) {
-        return components.length;
-    }
+    function componentCount() external view returns (uint256) { return components.length; }
 
     // =============================================================
-    //                     DEPOSIT (JOIN)
+    //                       DEPOSIT (JOIN)
     // =============================================================
 
-    /// @notice Deposit vault shares from every component to mint index tokens.
-    ///         `sharesIn[i]` must be approved for transfer before calling.
+    /// @notice Deposit RS tokens from every component to mint index tokens.
     ///         Use quote() first to compute the correct amounts for a target USDC value.
     ///
-    /// @param  sharesIn  Vault shares for each component in component order.
+    /// @param  rsAmountsIn  RS token amounts for each component in component order.
     /// @return indexMinted  Index tokens received after fee.
-    function deposit(uint256[] calldata sharesIn)
+    function deposit(uint256[] calldata rsAmountsIn)
         external
         nonReentrant
         returns (uint256 indexMinted)
     {
         uint256 n = components.length;
-        require(n > 0,               "Index: no components");
-        require(_weightsValid(),     "Index: weights not finalised");
-        require(sharesIn.length == n, "Index: wrong array length");
+        require(n > 0,                  "Index: no components");
+        require(_weightsValid(),         "Index: weights not finalised");
+        require(rsAmountsIn.length == n, "Index: wrong array length");
 
-        // Compute total USDC value being deposited
-        uint256 usdcDeposited;
-        for (uint256 i = 0; i < n; i++) {
-            usdcDeposited += components[i].vault.convertToAssets(sharesIn[i]);
-        }
-        require(usdcDeposited > 0, "Index: zero deposit value");
+        // Harvest all pending USDC before computing index value
+        _harvestAll();
 
-        uint256 fee = (usdcDeposited * FEE_BP) / BP_SCALE;
-        uint256 netUsdc = usdcDeposited - fee;
-
-        // Compute index tokens to mint
+        // Compute USDC value of deposit using live RS dividend data
+        // Since RS tokens don't have a market price onchain, we proxy value by
+        // assuming each RS token contributes dividend value ∝ its claimable USDC.
+        // For equal weighting, all components should contribute in proportion to weights.
         uint256 supply = totalSupply();
+        uint256 depositUsdcValue = _computeDepositValue(rsAmountsIn);
+        require(depositUsdcValue > 0, "Index: zero deposit value");
+
+        uint256 fee     = (depositUsdcValue * FEE_BP) / BP_SCALE;
+        uint256 netUsdc = depositUsdcValue - fee;
+
         if (supply == 0) {
             indexMinted = netUsdc;
         } else {
@@ -153,146 +166,193 @@ contract APIYieldIndex is ERC20, ReentrancyGuard {
         require(indexMinted > 0,                   "Index: mint too small");
         require(supply + indexMinted <= MAX_SUPPLY, "Index: supply cap");
 
-        // Pull shares from user
+        // Pull RS tokens from user
         for (uint256 i = 0; i < n; i++) {
-            if (sharesIn[i] > 0) {
-                IERC20(address(components[i].vault)).safeTransferFrom(
-                    msg.sender, address(this), sharesIn[i]
+            if (rsAmountsIn[i] > 0) {
+                IERC20(address(components[i].rs)).safeTransferFrom(
+                    msg.sender, address(this), rsAmountsIn[i]
                 );
             }
         }
 
         _mint(msg.sender, indexMinted);
-        emit Deposited(msg.sender, sharesIn, indexMinted, usdcDeposited);
+        emit Deposited(msg.sender, rsAmountsIn, indexMinted, depositUsdcValue);
     }
 
     // =============================================================
-    //                      REDEEM (EXIT)
+    //                       REDEEM (EXIT)
     // =============================================================
 
-    /// @notice Burn index tokens to receive a pro-rata slice of every component.
-    ///         Amount received per component = sharesHeld[i] * indexAmount / totalSupply.
+    /// @notice Burn index tokens to receive pro-rata RS tokens from each component
+    ///         plus a proportional share of any harvested USDC held by the contract.
     ///
     /// @param  indexAmount  Index tokens to burn.
-    /// @return sharesOut    Vault shares returned for each component.
+    /// @return rsAmountsOut  RS tokens returned per component.
     function redeem(uint256 indexAmount)
         external
         nonReentrant
-        returns (uint256[] memory sharesOut)
+        returns (uint256[] memory rsAmountsOut)
     {
         uint256 n = components.length;
-        require(n > 0,                               "Index: no components");
-        require(indexAmount > 0,                     "Index: zero amount");
+        require(n > 0,                              "Index: no components");
+        require(indexAmount > 0,                    "Index: zero amount");
         require(balanceOf(msg.sender) >= indexAmount, "Index: insufficient balance");
 
-        uint256 supply = totalSupply();
-        sharesOut = new uint256[](n);
+        _harvestAll();
 
-        uint256 usdcValue;
+        uint256 supply      = totalSupply();
+        rsAmountsOut        = new uint256[](n);
+        uint256 usdcBalance = USDC.balanceOf(address(this));
+
+        // Proportional USDC
+        uint256 usdcOut = (usdcBalance * indexAmount) / supply;
+
         for (uint256 i = 0; i < n; i++) {
-            uint256 sharesHeld = IERC20(address(components[i].vault)).balanceOf(address(this));
-            // Gross shares owed, then apply fee
-            uint256 grossShares = (sharesHeld * indexAmount) / supply;
-            uint256 feeShares   = (grossShares * FEE_BP) / BP_SCALE;
-            sharesOut[i]        = grossShares - feeShares;
-            usdcValue          += components[i].vault.convertToAssets(sharesOut[i]);
+            uint256 rsHeld    = IERC20(address(components[i].rs)).balanceOf(address(this));
+            uint256 grossRS   = (rsHeld * indexAmount) / supply;
+            uint256 feeRS     = (grossRS * FEE_BP) / BP_SCALE;
+            rsAmountsOut[i]   = grossRS - feeRS;
         }
 
         _burn(msg.sender, indexAmount);
 
         for (uint256 i = 0; i < n; i++) {
-            if (sharesOut[i] > 0) {
-                IERC20(address(components[i].vault)).safeTransfer(msg.sender, sharesOut[i]);
+            if (rsAmountsOut[i] > 0) {
+                IERC20(address(components[i].rs)).safeTransfer(msg.sender, rsAmountsOut[i]);
             }
         }
 
-        emit Redeemed(msg.sender, indexAmount, sharesOut, usdcValue);
+        if (usdcOut > 0) USDC.safeTransfer(msg.sender, usdcOut);
+
+        emit Redeemed(msg.sender, indexAmount, rsAmountsOut, usdcOut);
     }
 
     // =============================================================
-    //                       VIEW FUNCTIONS
+    //                           HARVEST
     // =============================================================
 
-    /// @notice Total USDC value of all assets held by the index.
+    /// @notice Permissionless: claim USDC dividends from all RS token components.
+    function harvest() external nonReentrant {
+        uint256 claimed = _harvestAll();
+        require(claimed > 0, "Index: nothing to harvest");
+    }
+
+    // =============================================================
+    //                        VIEW FUNCTIONS
+    // =============================================================
+
+    /// @notice Total USDC value backed by this index.
+    ///         = USDC already harvested in contract + pending claimable from all RS tokens.
     function indexValue() public view returns (uint256 total) {
+        total = USDC.balanceOf(address(this));
         for (uint256 i = 0; i < components.length; i++) {
-            uint256 sharesHeld = IERC20(address(components[i].vault)).balanceOf(address(this));
-            total += components[i].vault.convertToAssets(sharesHeld);
+            total += components[i].rs.claimable(address(this));
         }
     }
 
     /// @notice USDC value per index token (1e6-scaled).
     function pricePerShare() external view returns (uint256) {
         uint256 supply = totalSupply();
-        if (supply == 0) return 1e6;
+        if (supply == 0) return 0;
         return (indexValue() * 1e6) / supply;
     }
 
-    /// @notice Per-component breakdown: vault address, weight, shares held, USDC value.
+    /// @notice Per-component breakdown.
     function componentSnapshot()
         external
         view
         returns (
-            address[] memory vaults,
+            address[] memory rsTokens,
             uint256[] memory weights,
-            uint256[] memory sharesHeld,
-            uint256[] memory usdcValues
+            uint256[] memory rsHeld,
+            uint256[] memory usdcClaimable
         )
     {
-        uint256 n  = components.length;
-        vaults     = new address[](n);
-        weights    = new uint256[](n);
-        sharesHeld = new uint256[](n);
-        usdcValues = new uint256[](n);
+        uint256 n   = components.length;
+        rsTokens    = new address[](n);
+        weights     = new uint256[](n);
+        rsHeld      = new uint256[](n);
+        usdcClaimable = new uint256[](n);
 
         for (uint256 i = 0; i < n; i++) {
-            vaults[i]     = address(components[i].vault);
-            weights[i]    = components[i].weightBp;
-            sharesHeld[i] = IERC20(address(components[i].vault)).balanceOf(address(this));
-            usdcValues[i] = components[i].vault.convertToAssets(sharesHeld[i]);
+            rsTokens[i]      = address(components[i].rs);
+            weights[i]       = components[i].weightBp;
+            rsHeld[i]        = IERC20(address(components[i].rs)).balanceOf(address(this));
+            usdcClaimable[i] = components[i].rs.claimable(address(this));
         }
     }
 
-    /// @notice Quote the vault share amounts needed to deposit a target USDC value.
-    ///         Allocates `usdcTarget` across components by weight.
-    ///
-    /// @param  usdcTarget  Total USDC value to deposit.
-    /// @return sharesNeeded  Required vault shares per component.
-    function quote(uint256 usdcTarget)
-        external
-        view
-        returns (uint256[] memory sharesNeeded)
-    {
+    /// @notice Quote RS amounts needed to deposit a target USDC value.
+    ///         Allocates usdcTarget across components by weight.
+    ///         Returns raw RS token amounts assuming 1 RS token ≈ 1 unit of weight capacity.
+    ///         Callers should verify amounts via componentSnapshot().
+    /// @param  usdcTarget  Target USDC value to add to the index.
+    function quote(uint256 usdcTarget) external view returns (uint256[] memory rsNeeded) {
         uint256 n = components.length;
-        sharesNeeded = new uint256[](n);
+        rsNeeded = new uint256[](n);
         for (uint256 i = 0; i < n; i++) {
-            uint256 usdcForComponent = (usdcTarget * components[i].weightBp) / BP_SCALE;
-            sharesNeeded[i] = components[i].vault.convertToShares(usdcForComponent);
+            // Allocate USDC by weight, then convert to RS tokens
+            // Since RS tokens don't have a fixed USDC price onchain,
+            // we use the proportion of current RS held × weightBp as a heuristic.
+            rsNeeded[i] = (usdcTarget * components[i].weightBp) / BP_SCALE;
         }
     }
 
-    /// @notice Quote the vault shares returned for redeeming `indexAmount` tokens.
-    function quoteRedeem(uint256 indexAmount)
-        external
-        view
-        returns (uint256[] memory sharesOut)
-    {
+    /// @notice Quote RS amounts returned for redeeming `indexAmount` tokens.
+    function quoteRedeem(uint256 indexAmount) external view returns (uint256[] memory rsOut) {
         uint256 n      = components.length;
         uint256 supply = totalSupply();
-        sharesOut      = new uint256[](n);
-        if (supply == 0) return sharesOut;
+        rsOut          = new uint256[](n);
+        if (supply == 0) return rsOut;
 
         for (uint256 i = 0; i < n; i++) {
-            uint256 sharesHeld  = IERC20(address(components[i].vault)).balanceOf(address(this));
-            uint256 grossShares = (sharesHeld * indexAmount) / supply;
-            uint256 feeShares   = (grossShares * FEE_BP) / BP_SCALE;
-            sharesOut[i]        = grossShares - feeShares;
+            uint256 rsHeld   = IERC20(address(components[i].rs)).balanceOf(address(this));
+            uint256 grossRS  = (rsHeld * indexAmount) / supply;
+            uint256 feeRS    = (grossRS * FEE_BP) / BP_SCALE;
+            rsOut[i]         = grossRS - feeRS;
         }
     }
 
     // =============================================================
-    //                         INTERNAL
+    //                           INTERNAL
     // =============================================================
+
+    function _harvestAll() internal returns (uint256 totalClaimed) {
+        for (uint256 i = 0; i < components.length; i++) {
+            uint256 claimable = components[i].rs.claimable(address(this));
+            if (claimable > 0) {
+                components[i].rs.claim();
+                totalClaimed += claimable;
+            }
+        }
+        if (totalClaimed > 0) {
+            totalHarvestedUsdc += totalClaimed;
+            emit Harvested(totalClaimed);
+        }
+    }
+
+    /// @dev Proxy for USDC value of a deposit: use the proportional share of index value.
+    ///      Each component contributes its weight-adjusted RS amount.
+    function _computeDepositValue(uint256[] memory rsAmountsIn)
+        internal
+        view
+        returns (uint256 usdcValue)
+    {
+        // Total RS tokens held per component before deposit
+        // Deposit value ∝ ratio of added RS to existing RS, weighted by component dividend yield
+        for (uint256 i = 0; i < components.length; i++) {
+            uint256 currentRS = IERC20(address(components[i].rs)).balanceOf(address(this));
+            uint256 claimable = components[i].rs.claimable(address(this));
+            // Per-component dividend rate: claimable / currentRS (if any held)
+            if (currentRS > 0) {
+                // Value added = rsAmountsIn * (claimable / currentRS)
+                usdcValue += (rsAmountsIn[i] * claimable) / currentRS;
+            } else {
+                // No existing RS held: use raw RS amount as proxy value (1 RS ≈ 1 USDC unit)
+                usdcValue += rsAmountsIn[i];
+            }
+        }
+    }
 
     function _weightsValid() internal view returns (bool) {
         uint256 total;
@@ -303,20 +363,18 @@ contract APIYieldIndex is ERC20, ReentrancyGuard {
     }
 
     // =============================================================
-    //                           ADMIN
+    //                             ADMIN
     // =============================================================
 
     function setAdmin(address newAdmin) external {
-        require(msg.sender == admin,  "Index: only admin");
-        require(newAdmin != address(0), "Index: zero address");
+        require(msg.sender == admin,     "Index: only admin");
+        require(newAdmin != address(0),  "Index: zero address");
         emit AdminUpdated(admin, newAdmin);
         admin = newAdmin;
     }
 
     function rescueERC20(IERC20 token, address to, uint256 amount) external {
         require(msg.sender == admin, "Index: only admin");
-        // Allow rescuing any token — admin is trusted; no user funds at risk
-        // since all deposits/redemptions flow through explicit user transactions
         require(to != address(0),    "Index: zero address");
         token.safeTransfer(to, amount);
     }

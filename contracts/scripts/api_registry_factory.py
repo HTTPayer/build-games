@@ -520,28 +520,28 @@ if __name__ == "__main__":
     #   vault_bp=5000, revenue_share_bp=2000 → vault 50%, RS 20%, you 28% direct
 
     # ── MODE A: Vault only ───────────────────────────────────────────────────
-    vault_addr, _, splitter_addr, reg_id = deploy_provider(
-        vault_name   = "Weather API Vault",
-        vault_symbol = "wrvAPI",
-        vault_bp     = 9_800,          # 98% to vault; protocol gets 2%; you get 0% direct 
-        vault_genesis_shares= 1000000000000, #Optional, 1 million
-        metadata_uri = "https://placeholder",
-    )
-    print_vault_state(vault_addr)
-    print_splitter_state(splitter_addr)
-    print(f'now you can set splitter as the payTo')
-    breakpoint()
+    # vault_addr, _, splitter_addr, reg_id = deploy_provider(
+    #     vault_name   = "Weather API Vault",
+    #     vault_symbol = "wrvAPI",
+    #     vault_bp     = 9_800,          # 98% to vault; protocol gets 2%; you get 0% direct 
+    #     vault_genesis_shares= 1000000000000, #Optional, 1 million
+    #     metadata_uri = "https://placeholder",
+    # )
+    # print_vault_state(vault_addr)
+    # print_splitter_state(splitter_addr)
+    # print(f'now you can set splitter as the payTo')
+    # breakpoint()
 
     # ── MODE B: Revenue share only ───────────────────────────────────────────
-    # _, rs_addr, splitter_addr, reg_id = deploy_provider(
-    #     vault_name           = "Weather API",
-    #     vault_symbol         = "wAPI",
-    #     vault_bp             = 0,              # no vault
-    #     revenue_share_bp     = 9_800,          # 98% to RS; protocol gets 2%; you get 0% direct
-    #     revenue_share_shares = 1_000_000_000_000,  # 1M founder shares (6 dec)
-    #     metadata_uri         = "ipfs://Qm...",
-    # )
-    # print_splitter_state(splitter_addr)
+    _, rs_addr, splitter_addr, reg_id = deploy_provider(
+        vault_name           = "Weather API 5",
+        vault_symbol         = "wv5API",
+        vault_bp             = 0,              # no vault
+        revenue_share_bp     = 9_800,          # 98% to RS; protocol gets 2%; you get 0% direct
+        revenue_share_shares = 1_000_000_000_000,  # 1M founder shares (6 dec)
+        metadata_uri         = "ipfs://Qm...",
+    )
+    print_splitter_state(splitter_addr)
 
     # ── MODE C: Two-tier, all revenue shared ────────────────────────────────
     # vault_addr, rs_addr, splitter_addr, reg_id = deploy_provider(
@@ -572,6 +572,7 @@ if __name__ == "__main__":
     # # Register API endpoints after deploying (one call per route):
     url_path = os.getenv("X402_ENDPOINT")
     print(f'url_path: {url_path}')
+    breakpoint()
     endpoint_id = register_endpoint(
         provider_id = reg_id,
         path        = url_path,
