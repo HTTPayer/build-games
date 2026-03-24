@@ -42,7 +42,7 @@ The protocol is built in three composable layers. Each layer is independently us
 │  Stablecoins · Futures · Index · IAO · CDP                          │
 ├─────────────────────────────────────────────────────────────────────┤
 │  LAYER 1 — Revenue Tokenization                                     │
-│  ProviderRevenueVault (ERC4626) · ProviderRevenueShare (royalty)    │
+│  ProviderRevenueShare (royalty)                                     │
 │  ProviderRevenueSplitter                                            │
 ├─────────────────────────────────────────────────────────────────────┤
 │  LAYER 0 — Infrastructure & Enforcement                             │
@@ -146,7 +146,7 @@ Once vault shares exist and their price is driven by real API revenue, they beco
 
 | Contract | Description |
 |---|---|
-| `WrappedRevenueShare` | ERC-20 wrapper for RS tokens. 1 wRS = 1 RS + accrued USDC yield. Deposit RS → receive wRS 1:1. USDC dividends accumulate via `harvest()`; holders redeem for RS + USDC. Chainlink Automation compatible + built-in price feed. |
+| `WrappedRevenueShare` | ERC-20 wrapper for RS tokens. 1 wRS = 1 RS + accrued USDC yield. Deposit RS → receive wRS. USDC dividends accumulate via `harvest()`; holders redeem for RS + USDC. Chainlink Automation compatible + built-in price feed. |
 
 **Other:**
 
@@ -163,38 +163,75 @@ Once vault shares exist and their price is driven by real API revenue, they beco
 ```
 build-games/
 ├── contracts/                        Foundry project
-│   ├── src/                          Solidity contracts (Layer 0, 1, 2)
-│   ├── script/DeployAll.s.sol        Deploy script
-│   ├── broadcast/                    Deployed addresses (source of truth)
-│   ├── composed/                     Python SDK (installable, shared by CLI + scripts)
-│   │   ├── client.py                 ComposedClient — typed wrappers for all contracts
-│   │   ├── _abis.py                  Trimmed ABIs for SDK-managed contracts
-│   │   └── _addresses.py             Deployed contract addresses
+│   ├── src/                         Solidity contracts
+│   │   ├── ProviderRevenueShare.sol      Layer 1 - Revenue token (claim-based)
+│   │   ├── ProviderRevenueShareV2.sol    Layer 1 - Revenue token (rebasing)
+│   │   ├── ProviderRevenueSplitter.sol   Layer 1 - Routes revenue to tokens
+│   │   ├── APIIntegrityRegistry.sol     Layer 0 - Endpoint registry
+│   │   ├── StakeManager.sol             Layer 0 - Staking/bonding
+│   │   ├── ChallengeManager.sol         Layer 0 - Challenge resolution
+│   │   ├── APIRegistryFactory.sol        Layer 0 - Factory deployment
+│   │   └── l2/                          Layer 2 - Financial applications
+│   │       ├── WrappedRevenueShare.sol  wRS wrapper (1:1 mint)
+│   │       ├── APIYieldIndex.sol        Index token
+│   │       ├── APIRevenueStable.sol     Stablecoin
+│   │       ├── RevShareStable.sol       Stablecoin
+│   │       ├── APIUSD.sol               CDP stablecoin
+│   │       ├── yAPIUSD.sol              Yield stablecoin
+│   │       ├── wcAPIUSD.sol             Credit stablecoin
+│   │       ├── InitialAPIOffering.sol   IAO
+│   │       └── APIRevenueFuture.sol     Futures
+│   ├── script/                       Deploy scripts
+│   │   ├── DeployAll.s.sol             Deploy full protocol
+│   │   ├── DeployWrappedRevenueShare.s.sol
+│   │   └── Deploy*.s.sol               Individual L2 deployments
+│   ├── broadcast/                    Deployed addresses
+│   │   ├── DeployAll.s.sol/           Layer 0+1 deployments
+│   │   └── DeployWrappedRevenueShare.s.sol/
+│   ├── composed/                     Python SDK
+│   │   ├── client.py                  ComposedClient
+│   │   ├── _abis.py
+│   │   └── _addresses.py
 │   └── scripts/                      Python tooling
-│       ├── cli.py                    Provider CLI — entry point: `composed`
-│       ├── admin_cli.py              Admin CLI (set-forwarder, mint-usdc, etc.)
-│       ├── cre_watcher.py            Auto-settles challenges via CRE simulate
-│       ├── challenger_watcher.py     Monitors endpoints, challenges mismatches
-│       ├── analytics_indexer.py      Indexes protocol events into SQLite
-│       ├── analytics_api.py          FastAPI REST layer over the indexed data
-│       ├── analytics_dashboard.py    Streamlit dashboard
-│       ├── utils.py                  Shared web3 helpers
-│       ├── x402_metadata.py          x402 hash computation
-│       └── verify.py                 Snowtrace contract verification
+│       ├── cli.py                     Provider CLI (`composed`)
+│       ├── admin_cli.py
+│       ├── cre_watcher.py             Auto-settles challenges
+│       ├── challenger_watcher.py     Monitors endpoints
+│       ├── revenue_splitter_trigger.py  Cron job for distribution
+│       └── utils.py
 │
-├── cre/                              Chainlink CRE workflow
-│   ├── project.sample.yaml           CRE project config template
+├── analytics/                       Protocol analytics
+│   ├── pyproject.toml
+│   ├── src/
+│   │   ├── analytics_indexer.py
+│   │   ├── analytics_api.py
+│   │   ├── analytics_dashboard.py
+│   │   └── utils.py
+│   └── README.md
+│
+├── challenger_watcher/              Challenger bot
+│   ├── pyproject.toml
+│   ├── challenger_watcher.py
+│   └── README.md
+│
+├── cre/                             Chainlink CRE workflow
+│   ├── project.sample.yaml
+│   ├── project.yaml
+│   ├── .env
 │   └── integrity-workflow/
-│       ├── main.ts                   Log trigger → hash verify → onReport
-│       ├── workflow.sample.yaml      Staging / production targets template
-│       └── config.staging.json       ChallengeManager address + chain selector
+│       ├── main.ts
+│       ├── workflow.yaml
+│       └── config.staging.json
 │
-├── servers/                          x402 server examples
-│   └── src/server.ts                 Reference implementation
+├── servers/                         x402 server examples
+│   └── src/server.ts
+│
+├── scripts/                         Standalone scripts
+│   └── revenue_splitter_trigger.py  Revenue distribution cron
 │
 └── docs/
-    ├── analytics.md                  Analytics API reference
-    ├── frontend-provider-registration.md   Wagmi integration guide
+    ├── analytics.md
+    ├── frontend-provider-registration.md
     └── OVERVIEW.md
 ```
 
@@ -333,19 +370,34 @@ uv run python challenger_watcher.py
 ### 4. Run the analytics dashboard
 
 ```bash
-cd contracts/scripts
+cd analytics
+uv sync
 
 # Sync historical events into SQLite
-uv run python analytics_indexer.py --once
+uv run python src/analytics_indexer.py --once
 
 # Terminal 1 — API
-uv run uvicorn analytics_api:app --port 8000
+uv run uvicorn src.analytics_api:app --port 8000
 
 # Terminal 2 — Dashboard
-uv run streamlit run analytics_dashboard.py
+uv run streamlit run src/analytics_dashboard.py
 ```
 
-See `docs/analytics.md` for full details and API reference.
+See `analytics/README.md` for full details.
+
+### 5. Start the revenue distribution cron
+
+```bash
+cd scripts
+uv sync
+uv run python revenue_splitter_trigger.py
+```
+
+Or run once:
+
+```bash
+uv run python revenue_splitter_trigger.py --once
+```
 
 ### 5. Settle challenges via CRE
 
@@ -379,18 +431,16 @@ See `cre/README.md` for the full CRE setup guide.
 |---|---|
 | Layer 0 contracts | Complete — deployed on Fuji |
 | Layer 1 contracts | Complete — deployed on Fuji |
-| Layer 2 contracts | Complete (not deployed — demo scope is Layer 0+1) |
+| Layer 2 contracts | Complete — WrappedRevenueShare deployed |
 | Chainlink CRE workflow | Complete — simulated end-to-end |
 | Provider CLI | Complete |
 | Admin CLI | Complete |
 | CRE challenge watcher | Complete |
 | Challenger watcher | Complete |
-| Frontend guide | Complete (`docs/frontend-provider-registration.md`) |
-| Python SDK (`composed`) | Complete (`contracts/composed/`) |
-| Analytics indexer | Complete (`contracts/scripts/analytics_indexer.py`) |
-| Analytics API | Complete (`contracts/scripts/analytics_api.py`) |
-| Analytics dashboard | Complete (`contracts/scripts/analytics_dashboard.py`) |
-| Frontend app | Complete — live at [composed.httpayer.com](https://composed.httpayer.com/) |
+| Revenue splitter trigger | Complete |
+| Analytics (indexer, API, dashboard) | Complete |
+| Python SDK (`composed`) | Complete |
+| Frontend app | Live at [composed.httpayer.com](https://composed.httpayer.com/) |
 
 ---
 
