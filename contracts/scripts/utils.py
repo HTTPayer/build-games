@@ -48,7 +48,7 @@ def get_contract_config(name: str):
 
     address = next(
         tx["contractAddress"]
-        for tx in txs
+        for tx in reversed(txs)
         if tx.get("transactionType") == "CREATE" and tx.get("contractName") == name
     )
     return abi, Web3.to_checksum_address(address)

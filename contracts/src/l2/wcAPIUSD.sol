@@ -356,7 +356,7 @@ contract wcAPIUSD is ERC20, Pausable, ReentrancyGuard {
 
         // Claim all accumulated dividends → USDC flows into contract
         uint256 usdcBefore   = USDC.balanceOf(address(this));
-        rs.claim();
+        rs.claim(address(this));
         uint256 usdcRecovered = USDC.balanceOf(address(this)) - usdcBefore;
 
         // Clear as much debt as possible

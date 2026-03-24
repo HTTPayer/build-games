@@ -4,6 +4,7 @@ pragma solidity 0.8.30;
 import "@openzeppelin/contracts/access/AccessControl.sol";
 import "@openzeppelin/contracts/utils/Pausable.sol";
 import "@openzeppelin/contracts/utils/ReentrancyGuard.sol";
+import "@openzeppelin/contracts/utils/Strings.sol";
 import "./interfaces/IStakeManager.sol";
 
 contract APIIntegrityRegistry is AccessControl, Pausable, ReentrancyGuard {
@@ -45,6 +46,7 @@ contract APIIntegrityRegistry is AccessControl, Pausable, ReentrancyGuard {
     mapping(uint256 => Provider) public providers;
     mapping(bytes32 => Endpoint) public endpoints;
     mapping(address => bytes32[]) public providerEndpoints;
+    mapping(bytes32 => uint256) public endpointToProviderId;
 
     event ProviderRegistered(uint256 indexed id, address indexed owner);
     event ProviderUpdated(uint256 indexed id, address indexed owner);
@@ -131,17 +133,30 @@ contract APIIntegrityRegistry is AccessControl, Pausable, ReentrancyGuard {
         uint256 providerId,
         string calldata path,
         string calldata method,
-        bytes32 integrityHash
+        address payTo,
+        address asset,
+        string calldata network,
+        string calldata url,
+        uint256 amount
     ) external whenNotPaused nonReentrant {
 
         Provider storage p = providers[providerId];
         require(p.owner == msg.sender, "not owner");
         require(p.active, "inactive");
 
+        // If payTo is not provided, default to provider's revenueSplitter
+        if (payTo == address(0)) {
+            payTo = p.revenueSplitter;
+        } else {
+            require(payTo == p.revenueSplitter, "payTo must equal revenueSplitter");
+        }
+
         bytes32 endpointId = keccak256(
             abi.encodePacked(providerId, path, method)
         );
         require(endpoints[endpointId].registeredAt == 0, "already registered");
+
+        bytes32 integrityHash = _computeIntegrityHash(amount, asset, network, payTo, url);
 
         endpointCount++;
 
@@ -157,19 +172,69 @@ contract APIIntegrityRegistry is AccessControl, Pausable, ReentrancyGuard {
             lastCheckedAt: block.timestamp
         });
 
+        endpointToProviderId[endpointId] = providerId;
         providerEndpoints[msg.sender].push(endpointId);
 
         emit EndpointRegistered(endpointId, msg.sender);
     }
 
+    function _computeIntegrityHash(
+        uint256 amount,
+        address asset,
+        string memory network,
+        address payTo,
+        string memory url
+    ) internal pure returns (bytes32) {
+        // Convert addresses to lowercase hex (no 0x prefix, 40 chars)
+        string memory assetHex = _toLowercaseHex(asset);
+        string memory payToHex = _toLowercaseHex(payTo);
+
+        string memory canonical = string.concat(
+            '{"amount":"', Strings.toString(amount), '","asset":"',
+            assetHex, '","network":"',
+            network, '","payTo":"',
+            payToHex, '","url":"',
+            url, '"}'
+        );
+        return keccak256(bytes(canonical));
+    }
+
+    function _toLowercaseHex(address addr) internal pure returns (string memory) {
+        bytes20 addrBytes = bytes20(addr);
+        bytes16 hexChars = "0123456789abcdef";
+        bytes memory result = new bytes(40);
+        for (uint i = 0; i < 20; i++) {
+            uint8 b = uint8(addrBytes[i]);
+            result[i * 2] = hexChars[b >> 4];
+            result[i * 2 + 1] = hexChars[b & 0xf];
+        }
+        return string(result);
+    }
+
     function updateEndpoint(
         bytes32 endpointId,
-        bytes32 newIntegrityHash
+        address payTo,
+        address asset,
+        string calldata network,
+        string calldata url,
+        uint256 amount
     ) external whenNotPaused {
         Endpoint storage e = endpoints[endpointId];
         require(e.registeredAt != 0, "not registered");
         require(e.active,             "inactive");
         require(e.provider == msg.sender, "not owner");
+
+        uint256 providerId = endpointToProviderId[endpointId];
+        Provider storage p = providers[providerId];
+
+        // If payTo is not provided, default to provider's revenueSplitter
+        if (payTo == address(0)) {
+            payTo = p.revenueSplitter;
+        } else {
+            require(payTo == p.revenueSplitter, "payTo must equal revenueSplitter");
+        }
+
+        bytes32 newIntegrityHash = _computeIntegrityHash(amount, asset, network, payTo, url);
 
         e.integrityHash = newIntegrityHash;
         e.version++;

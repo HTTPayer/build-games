@@ -12,8 +12,9 @@ interface IProviderRevenueShare is IERC20 {
     /// @notice Accumulated but unclaimed USDC for `account`.
     function claimable(address account) external view returns (uint256);
 
-    /// @notice Transfer all claimable USDC to msg.sender.
-    function claim() external;
+    /// @notice Transfer all claimable USDC owed to msg.sender.
+    /// @param to  Optional recipient. Defaults to msg.sender.
+    function claim(address to) external;
 
     /// @notice Cumulative USDC earned per whole share since genesis.
     ///         Raw USDC units (1e6 = 1 USDC) per whole share (1e6 raw tokens).

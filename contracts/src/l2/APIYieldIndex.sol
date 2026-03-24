@@ -321,7 +321,7 @@ contract APIYieldIndex is ERC20, ReentrancyGuard {
         for (uint256 i = 0; i < components.length; i++) {
             uint256 claimable = components[i].rs.claimable(address(this));
             if (claimable > 0) {
-                components[i].rs.claim();
+                components[i].rs.claim(address(this));
                 totalClaimed += claimable;
             }
         }

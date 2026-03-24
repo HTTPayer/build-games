@@ -67,18 +67,55 @@ Bond total     → slashed on fraud           (deterrent, stronger than principa
 
 ---
 
-## TVL-Linked Bond Floor
+## Revenue-Linked Bond Floor
 
-Replace the flat `minimumStakeRequired` with a dynamic floor that scales with vault TVL:
+Replace the flat `minimumStakeRequired` with a dynamic floor that scales with API revenue volume. Since revenue now flows pass-through via `ProviderRevenueSplitter` (no vault TVL), the bond should scale with revenue velocity rather than locked capital.
 
 ```
-required_bond = max(MIN_STAKE, vault.totalAssets() × COVERAGE_RATIO)
+required_bond = max(MIN_STAKE, trailing_volume × COVERAGE_RATIO)
 ```
 
 - `MIN_STAKE` (e.g., 500 USDC) — anti-spam floor
-- `COVERAGE_RATIO` (e.g., 10%) — bond as first-loss layer for investors
+- `COVERAGE_RATIO` (e.g., 10–20%) — bond as first-loss layer for dividend holders
 
-As vault TVL grows, required bond grows proportionally. Enforced at `requestUnstake()` time and optionally at `vault.deposit()` time to gate new investor capital when provider is underbonded.
+### What "at-risk" amount should the bond cover?
+
+Three approaches, depending on how we measure economic exposure:
+
+#### Option 1: Unclaimed Balance
+```
+at_risk = revenueShare.totalPending() × COVERAGE_RATIO
+```
+
+Directly measures what's owed to holders right now. Pro: measurable on-chain. Con: depends on holder claim behavior; new APIs with few holders have near-zero unclaimed → tiny bond even if revenue is high.
+
+#### Option 2: Rolling Volume (recommended)
+```
+at_risk = trailing_N_volume × COVERAGE_RATIO
+```
+
+Uses trailing revenue as a proxy for expected future claims. More stable than unclaimed balance; directly tied to revenue velocity. High-volume APIs naturally maintain larger bonds.
+
+**Window choice:** The trailing window (N days) should approximate average holder claim inertia. Unknown at this point — options:
+- **O1:** Default 30 days, allow governance to adjust
+- **O2:** 7d/30d hybrid (0.7 × 7d_sum + 0.3 × 30d_sum) — balances stability + responsiveness
+- **O3:** Make it a protocol parameter — let each deployment decide based on expected holder behavior
+
+#### Option 3: Rolling Volume with Rate Snapshots
+
+Same as Option 2, but computed from `ProviderRevenueShare.rateSnapshots()` instead of storing a separate running sum. The `revenuePerShare` snapshots already track cumulative revenue over time — a 30-day lookback on snapshots gives the trailing volume without additional storage.
+
+### Implementation approaches
+
+**Splitter stores running sum:** Add a rolling buffer in `ProviderRevenueSplitter` that accumulates `totalDistributed` per distribution call. Truncate entries older than N days on each `distribute()`.
+
+**On-demand from events:** Off-chain oracles (e.g. Chainlink Automation) scan `Distributed` events and compute the trailing sum off-chain, posting the result on-chain. Avoids storage costs; more trust assumptions.
+
+**From RevenueShare snapshots:** Read `revenuePerShare` snapshots from `ProviderRevenueShare` directly. No splitter changes needed. Con: requires knowing share supply at each snapshot to back out volume.
+
+### Enforcement
+
+Enforced at `requestUnstake()` time — provider cannot unstake below the required floor. Optionally enforced at `openChallenge()` to gate challenge opening when provider is underbonded (prevents challenges against already-vulnerable providers).
 
 **Provider top-up:** Could be automated via Chainlink Automation — an upkeep monitors `isAdequatelyBonded()` and calls `stake()` from a pre-funded provider wallet when the bond dips below threshold.
 

@@ -1,0 +1,23 @@
+[build-system]
+requires = ["hatchling"]
+build-backend = "hatchling.build"
+
+[project]
+name = "composed-cli"
+version = "0.1.0"
+requires-python = ">=3.10"
+dependencies = [
+    "eth-account>=0.13.7",
+    "python-dotenv>=1.2.2",
+    "web3>=7.14.1",
+    "requests>=2.32.0",
+    "eth-abi>=5.0.0",
+    "composed",
+]
+
+[project.scripts]
+composed = "composed_cli.cli:main"
+admin-composed = "composed_cli.admin_cli:main"
+
+[tool.uv.sources]
+composed = { path = "../sdk" }

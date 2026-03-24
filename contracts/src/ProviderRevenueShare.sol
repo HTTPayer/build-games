@@ -158,12 +158,12 @@ contract ProviderRevenueShare is ERC20, Ownable, ReentrancyGuard {
      * @param recipient  Who receives the shares. Defaults to msg.sender
      *                   (handled at factory level) if not specified.
      * @param shares     Total shares to mint. This is the permanent maximum.
-     *                   Can never be increased.
+     *                   Minimum 1 full share (1_000_000 raw units). Can never be increased.
      */
     function genesisMint(address recipient, uint256 shares) external onlyOwner {
-        require(!genesisComplete,        "genesis already complete");
-        require(recipient != address(0), "zero recipient");
-        require(shares    > 0,           "zero shares");
+        require(!genesisComplete,                       "genesis already complete");
+        require(recipient != address(0),               "zero recipient");
+        require(shares >= 1_000_000,                    "min 1 full share (1e6)"); // 6-decimal token
 
         genesisComplete = true;
         _mint(recipient, shares);
@@ -187,18 +187,25 @@ contract ProviderRevenueShare is ERC20, Ownable, ReentrancyGuard {
      *         no amount parameter is needed and no approval is required.
      */
     function distribute() external nonReentrant {
-        // New USDC = total balance minus what is already accounted for (distributed but unclaimed).
-        uint256 amount = USDC.balanceOf(address(this)) - (totalDistributed - totalClaimed);
-        require(amount > 0,        "nothing to distribute");
-        require(totalSupply() > 0, "no shares outstanding");
+        require(_distribute(), "nothing to distribute");
+    }
 
-        // Increase the global accumulator proportionally.
-        // SCALE prevents precision loss when amount < totalSupply.
+    /**
+     * @dev Internal non-reverting distribute. Credits any unaccounted USDC into the
+     *      accumulator and returns true if any amount was distributed, false otherwise.
+     *      Called by the public distribute() and by claim() to ensure the accumulator
+     *      is current before computing a holder's claimable balance.
+     */
+    function _distribute() internal returns (bool) {
+        uint256 amount = USDC.balanceOf(address(this)) - (totalDistributed - totalClaimed);
+        if (amount == 0 || totalSupply() == 0) return false;
+
         revenuePerShare  += (amount * SCALE) / totalSupply();
         totalDistributed += amount;
 
         _takeSnapshotIfNeeded();
         emit RevenueDistributed(amount, revenuePerShare);
+        return true;
     }
 
     // =========================================================================
@@ -208,8 +215,17 @@ contract ProviderRevenueShare is ERC20, Ownable, ReentrancyGuard {
     /**
      * @notice Withdraw all USDC owed to msg.sender.
      *         Does NOT burn shares — you keep your equity and keep earning.
+     *         Calls _distribute() first so any USDC sitting in the contract since
+     *         the last distribute() is credited before computing the claimable amount.
+     *
+     * @param to  Optional recipient address. Defaults to msg.sender. Allows
+     *            batch contracts, yield routers, or gasless meta-tx forwarders
+     *            to direct claim proceeds to an arbitrary address.
      */
-    function claim() external nonReentrant {
+    function claim(address to) external nonReentrant {
+        if (to == address(0)) to = msg.sender;
+
+        _distribute();
         _settle(msg.sender);
 
         uint256 amount = pendingClaims[msg.sender];
@@ -218,9 +234,9 @@ contract ProviderRevenueShare is ERC20, Ownable, ReentrancyGuard {
         pendingClaims[msg.sender] = 0;
         totalClaimed             += amount;
 
-        USDC.safeTransfer(msg.sender, amount);
+        USDC.safeTransfer(to, amount);
 
-        emit Claimed(msg.sender, amount);
+        emit Claimed(to, amount);
     }
 
     /**

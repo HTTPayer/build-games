@@ -19,7 +19,7 @@ dependencies = [
 ]
 
 [tool.uv.sources]
-composed = { path = "../" }
+composed = { path = "../../sdk" }
 
 [project.scripts]
 composed = "cli:main"
