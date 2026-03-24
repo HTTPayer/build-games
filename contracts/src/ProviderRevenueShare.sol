@@ -337,8 +337,13 @@ contract ProviderRevenueShare is ERC20, Ownable, ReentrancyGuard {
     // ── Earnings metrics ──────────────────────────────────────────────────────
 
     /**
-     * @notice Cumulative USDC earned per share since genesis (6-decimal USDC units).
+     * @notice Cumulative USDC earned per share since genesis.
      *         Equivalent to "earnings per share" (EPS) in traditional finance.
+     *         Returned in raw USDC units (1e6 = 1 USDC) per whole share (1e6 raw tokens).
+     *
+     *         revenuePerShare is stored SCALE (1e18) magnified to preserve precision.
+     *         Multiplying by 1e6 (share decimals) before dividing by SCALE avoids
+     *         integer truncation to zero for small per-share values.
      *
      *         This is NOT a market price. Market price is determined by secondary
      *         markets and reflects expected *future* revenue. This figure captures
@@ -346,7 +351,7 @@ contract ProviderRevenueShare is ERC20, Ownable, ReentrancyGuard {
      */
     function cumulativeRevenuePerShare() external view returns (uint256) {
         if (totalSupply() == 0) return 0;
-        return revenuePerShare / SCALE;
+        return (revenuePerShare * 1e6) / SCALE;
     }
 
     /// @notice Manually trigger a snapshot (if the minimum interval has passed).

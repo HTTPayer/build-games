@@ -2,6 +2,8 @@ import express from "express";
 import { paymentMiddleware, x402ResourceServer } from "@x402/express";
 import { ExactEvmScheme } from "@x402/evm/exact/server";
 import { HTTPFacilitatorClient } from "@x402/core/server";
+import type { FacilitatorClient } from "@x402/core/server";
+import type { PaymentPayload, PaymentRequirements } from "@x402/core/types";
 
 const app = express();
 
@@ -24,10 +26,45 @@ const apiAmount5 = process.env.AMOUNT_5 || "1000";
 const payTo6 = process.env.PAY_TO_6 || "0x0Bec71239f73D54287a32f478784170bfa6aE6fd";
 const apiAmount6 = process.env.AMOUNT_6 || "1000";
 
-// Create facilitator client (testnet)
-const facilitatorClient = new HTTPFacilitatorClient({
-  url: "https://facilitator.ultravioletadao.xyz"
-});
+// Round-robin facilitator client — alternates requests across multiple facilitators
+class RoundRobinFacilitatorClient implements FacilitatorClient {
+  private clients: HTTPFacilitatorClient[];
+  private index = 0;
+
+  constructor(urls: string[]) {
+    this.clients = urls.map(url => new HTTPFacilitatorClient({ url }));
+  }
+
+  private next(): HTTPFacilitatorClient {
+    const client = this.clients[this.index];
+    this.index = (this.index + 1) % this.clients.length;
+    return client;
+  }
+
+  async verify(payload: PaymentPayload, requirements: PaymentRequirements) {
+    // Peek at the current client without advancing — verify and settle stay in sync
+    const client = this.clients[this.index];
+    const url = (client as any).url ?? "(unknown)";
+    // console.log(`[facilitator] verify → ${url}`);
+    return client.verify(payload, requirements);
+  }
+  async settle(payload: PaymentPayload, requirements: PaymentRequirements) {
+    // Advance only on settle — this is what executes on-chain
+    const client = this.next();
+    const url = (client as any).url ?? "(unknown)";
+    // console.log(`[facilitator] settle → ${url}`);
+    return client.settle(payload, requirements);
+  }
+  async getSupported() {
+    return this.clients[0].getSupported();
+  }
+}
+
+// Alternates between Ultraviolet and PayAI to spread load
+const facilitatorClient = new RoundRobinFacilitatorClient([
+  "https://facilitator.ultravioletadao.xyz",
+  "https://facilitator.payai.network",
+]);
 
 // Create resource server and register EVM scheme
 const server = new x402ResourceServer(facilitatorClient)
