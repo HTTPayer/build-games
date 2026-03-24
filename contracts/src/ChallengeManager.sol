@@ -64,6 +64,7 @@ contract ChallengeManager is IReceiver, ReentrancyGuard, Ownable {
     event ChallengeOpened(
         uint256 indexed id,
         bytes32 indexed endpointId,
+        address revenueSplitter,
         string  path,
         string  method,
         bytes32 integrityHash
@@ -130,7 +131,8 @@ contract ChallengeManager is IReceiver, ReentrancyGuard, Ownable {
         });
 
         // Emit full endpoint data so the CRE workflow needs no extra RPC calls
-        emit ChallengeOpened(challengeCount, endpointId, path, method, integrityHash);
+        (, , , address revenueSplitter, , ) = registry.providers(registry.endpointToProviderId(endpointId));
+        emit ChallengeOpened(challengeCount, endpointId, revenueSplitter, path, method, integrityHash);
     }
 
     // ── CRE callback ──────────────────────────────────────────────────────────

@@ -415,7 +415,7 @@ contract APIRevenueFuture is ReentrancyGuard {
         uint256 totalRS = rsHeld[address(_rs)];
         if (totalRS == 0) return 0;
 
-        _rs.claim();
+        _rs.claim(address(this));
         accUsdcPerRawShare[address(_rs)] += (claimed * PRECISION) / totalRS;
 
         emit Harvested(address(_rs), claimed, accUsdcPerRawShare[address(_rs)]);

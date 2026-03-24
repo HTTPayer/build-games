@@ -189,7 +189,7 @@ contract APIRevenueStable is ERC20, Pausable, ReentrancyGuard {
         if (claimable == 0) return;
 
         uint256 balanceBefore = USDC.balanceOf(address(this));
-        revenueShare.claim();
+        revenueShare.claim(address(this));
         uint256 harvested = USDC.balanceOf(address(this)) - balanceBefore;
 
         if (harvested > 0) {

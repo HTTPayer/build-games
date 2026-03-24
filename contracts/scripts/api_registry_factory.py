@@ -3,30 +3,29 @@ APIRegistryFactory — read checks and write tests.
 
 Write function access
 ────────────────────
-  deployProvider(...)  → any address (the caller becomes the vault owner and provider)
+  deployProvider(...)  → any address (the caller becomes the RS owner and provider)
 
 The factory has no admin functions — all protocol config (treasury address, bp cut)
 is set once at constructor time and is immutable.
 
 Deploy flow (what deployProvider does internally)
-─────────────────────────────────────────────────
-  1. Deploy ProviderRevenueVault   (factory is temporary owner)
-  2. genesisMint(genesisRecipient, genesisShares)
-  3. Transfer vault ownership → msg.sender (the provider)
+────────────────────────────────────────────────
+  1. Deploy ProviderRevenueShare   (factory is temporary owner)
+  2. genesisMint(recipient, shares)
+  3. Transfer RS ownership → msg.sender (the provider)
   4. Deploy ProviderRevenueSplitter with immutable split config
-  5. Emit ProviderDeployed(deployer, vault, splitter, ...)
+  5. Emit ProviderDeployed(deployer, revenueShare, splitter, ...)
 
 After deployment
-────────────────
+───────────────
   - Set payTo = splitter address in your x402 server
   - Call registerProvider() + registerEndpoint() in APIIntegrityRegistry
-  - x402 payments flow into splitter → distribute() routes to treasury / vault
+  - x402 payments flow into splitter → distribute() routes to treasury / RS
 
-Revenue simulation
-──────────────────
-  Transfer USDC to splitter  →  simulate an x402 payment landing
-  Call splitter.distribute() →  routes to protocol treasury, provider treasury, vault
-  Read vault.sharePrice()    →  share price rises with each distribution
+Revenue split
+────────────
+  protocolTreasuryBp (≤3%) + providerTreasuryBp + revenueShareBp = 100%
+  The remainder (after protocol + provider cuts) goes to RS holders.
 """
 
 import sys, os
@@ -36,7 +35,7 @@ from web3.logs import DISCARD
 from eth_abi import encode as abi_encode
 from utils import get_contract_config, get_abi, build_w3, build_account, send_tx, ERC20_ABI
 from verify import verify_contract
-from x402_metadata import fetch_integrity_hash
+from x402_metadata import fetch_payment_metadata
 
 # ── Setup ──────────────────────────────────────────────────────────────────────
 
@@ -52,7 +51,7 @@ usdc           = w3.eth.contract(address=usdc_address, abi=ERC20_ABI)
 PROTOCOL_BP    = factory.functions.protocolTreasuryBp().call()
 MAX_PROVIDER_BP = 10_000 - PROTOCOL_BP   # basis points available to the provider
 
-vault_abi         = get_abi("ProviderRevenueVault")
+revenue_share_abi = get_abi("ProviderRevenueShare")
 splitter_abi      = get_abi("ProviderRevenueSplitter")
 stake_manager_abi = get_abi("StakeManager")
 
@@ -70,7 +69,7 @@ def print_factory_state():
     protocol_bp       = factory.functions.protocolTreasuryBp().call()
     registry_addr     = factory.functions.registry().call()
     provider_count    = factory.functions.providerCount().call()
-    usdc_balance      = usdc.functions.balanceOf(account.address).call()
+    usdc_balance     = usdc.functions.balanceOf(account.address).call()
 
     print("\n── APIRegistryFactory state ──────────────────────────────────────")
     print(f"  protocolTreasury    : {protocol_treasury}")
@@ -82,30 +81,32 @@ def print_factory_state():
     print("──────────────────────────────────────────────────────────────────\n")
 
 
-def print_vault_state(vault_address: str):
-    vault = w3.eth.contract(
-        address=w3.to_checksum_address(vault_address),
-        abi=vault_abi,
+def print_revenue_share_state(rs_address: str):
+    rs = w3.eth.contract(
+        address=w3.to_checksum_address(rs_address),
+        abi=revenue_share_abi,
     )
-    total_assets    = vault.functions.totalAssets().call()
-    total_supply    = vault.functions.totalSupply().call()
-    share_price     = vault.functions.sharePrice().call()
-    genesis_done    = vault.functions.genesisComplete().call()
-    owner           = vault.functions.owner().call()
-    signer_shares   = vault.functions.balanceOf(account.address).call()
-    name            = vault.functions.name().call()
-    symbol          = vault.functions.symbol().call()
+    total_supply    = rs.functions.totalSupply().call()
+    total_dist     = rs.functions.totalDistributed().call()
+    total_claimed  = rs.functions.totalClaimed().call()
+    genesis_done   = rs.functions.genesisComplete().call()
+    owner          = rs.functions.owner().call()
+    signer_balance = rs.functions.balanceOf(account.address).call()
+    name           = rs.functions.name().call()
+    symbol         = rs.functions.symbol().call()
+    claimable      = rs.functions.claimable(account.address).call()
 
-    print(f"\n── Vault {vault_address} ──────────────────────")
-    print(f"  name          : {name} ({symbol})")
-    print(f"  owner         : {owner}")
-    print(f"  genesisComplete: {genesis_done}")
-    print(f"  totalSupply   : {total_supply / 1e6:.6f} shares")
-    print(f"  totalAssets   : {total_assets / 1e6:.6f} USDC")
-    print(f"  sharePrice    : {share_price / 1e18:.8f} USDC/share")
-    print(f"  signer shares : {signer_shares / 1e6:.6f}")
+    print(f"\n── RevenueShare {rs_address} ──────────────────────")
+    print(f"  name            : {name} ({symbol})")
+    print(f"  owner           : {owner}")
+    print(f"  genesisComplete : {genesis_done}")
+    print(f"  totalSupply     : {total_supply / 1e6:.6f} shares")
+    print(f"  totalDistributed: {total_dist / 1e6:.6f} USDC")
+    print(f"  totalClaimed    : {total_claimed / 1e6:.6f} USDC")
+    print(f"  signer balance  : {signer_balance / 1e6:.6f} shares")
+    print(f"  claimable now   : {claimable / 1e6:.6f} USDC")
     print("──────────────────────────────────────────────────────────────────\n")
-    return vault
+    return rs
 
 
 def print_splitter_state(splitter_address: str):
@@ -113,18 +114,19 @@ def print_splitter_state(splitter_address: str):
         address=w3.to_checksum_address(splitter_address),
         abi=splitter_abi,
     )
-    cfg     = splitter.functions.splitConfig().call()
-    pending = splitter.functions.pendingDistribution().call()
-    # splitConfig returns:
-    # (protocolTreasury, protocolBp, providerTreasury, providerBp,
-    #  revenueShare, revenueShareBp, vault, vaultBp)
+    protocol_treasury = splitter.functions.protocolTreasury().call()
+    protocol_bp       = splitter.functions.protocolTreasuryBp().call()
+    provider_treasury = splitter.functions.providerTreasury().call()
+    provider_bp       = splitter.functions.providerTreasuryBp().call()
+    rs_address        = splitter.functions.revenueShare().call()
+    rs_bp             = splitter.functions.revenueShareBp().call()
+    pending           = splitter.functions.pendingDistribution().call()
 
     ZERO = "0x0000000000000000000000000000000000000000"
     print(f"\n── Splitter {splitter_address} ────────────────")
-    print(f"  protocolTreasury  : {cfg[0]}  ({cfg[1] / 100:.2f}%)")
-    print(f"  providerTreasury  : {cfg[2] or '(none)'}  ({cfg[3] / 100:.2f}%)")
-    print(f"  revenueShare      : {cfg[4] if cfg[4] != ZERO else '(none)'}  ({cfg[5] / 100:.2f}%)")
-    print(f"  vault             : {cfg[6]}  ({cfg[7] / 100:.2f}%)")
+    print(f"  protocolTreasury  : {protocol_treasury}  ({protocol_bp / 100:.2f}%)")
+    print(f"  providerTreasury  : {provider_treasury or '(none)'}  ({provider_bp / 100:.2f}%)")
+    print(f"  revenueShare      : {rs_address}  ({rs_bp / 100:.2f}%)")
     print(f"  pendingDistribution: {pending / 1e6:.6f} USDC")
     print("──────────────────────────────────────────────────────────────────\n")
     return splitter
@@ -152,14 +154,12 @@ stake_manager = (
 
 print(f"APIIntegrityRegistry : {registry_address or '(not set)'}")
 
-
 def print_registry_provider(provider_id: int):
     """Print state of a registered provider by its registry ID (1-based)."""
     if registry is None:
         print("  (no registry configured)")
         return
     p = registry.functions.providers(provider_id).call()
-    # returns (owner, metadataURI, payoutAddress, revenueSplitter, active, createdAt)
     print(f"\n── Registry Provider #{provider_id} ─────────────────────────────────")
     print(f"  owner          : {p[0]}")
     print(f"  metadataURI    : {p[1]}")
@@ -176,7 +176,6 @@ def print_registry_endpoint(endpoint_id: str):
         return
     eid = bytes.fromhex(endpoint_id.removeprefix("0x"))
     e = registry.functions.endpoints(eid).call()
-    # returns (endpointId, provider, path, method, integrityHash, version, active, registeredAt, lastCheckedAt)
     print(f"\n── Endpoint {endpoint_id} ──────────")
     print(f"  provider       : {e[1]}")
     print(f"  path           : {e[2]}")
@@ -188,10 +187,7 @@ def print_registry_endpoint(endpoint_id: str):
     print(f"  lastCheckedAt  : {e[8]}")
     print("──────────────────────────────────────────────────────────────────\n")
 
-
 # ── Writes ─────────────────────────────────────────────────────────────────────
-
-revenue_share_abi = get_abi("ProviderRevenueShare")
 
 
 def ensure_staked():
@@ -231,82 +227,57 @@ def ensure_staked():
 
 
 def deploy_provider(
-    vault_name: str,
-    vault_symbol: str,
-    vault_bp: int = 0,
-    vault_genesis_shares: int = 0,
-    vault_genesis_recipient: str = "",
-    genesis_deposit: int = 0,
-    provider_treasury: str = "",
-    revenue_share_bp: int = 0,
-    revenue_share_shares: int = 0,
+    rs_name: str,
+    rs_symbol: str,
+    revenue_share_shares: int,
     revenue_share_recipient: str = "",
+    provider_treasury: str = "",
+    provider_treasury_bp: int = 0,
     metadata_uri: str = "",
-) -> tuple[str, str, str, int]:
+) -> tuple[str, str, int]:
     """
-    Deploy a vault + optional revenue share + splitter. Caller becomes vault owner.
+    Deploy a ProviderRevenueShare token + ProviderRevenueSplitter.
 
-    Revenue split — set the two explicit allocations; the remainder goes directly
-    to provider_treasury:
+    Revenue split (must sum to 100%):
+        protocolTreasuryBp (≤3%) + providerTreasuryBp + revenueShareBp = 100%
+        revenueShareBp is auto-computed as the remainder.
 
-        vault_bp           →  ProviderRevenueVault  (set 0 to skip)
-        revenue_share_bp   →  ProviderRevenueShare  (set 0 to skip)
-        protocol_bp        →  protocol treasury     (fixed at factory deploy)
-        remainder          →  provider_treasury     (auto-computed)
+    rs_name               — ERC20 name for the RS token (e.g. "Weather API Revenue Share").
+    rs_symbol             — ERC20 symbol for the RS token (e.g. "WRS").
+    revenue_share_shares  — Genesis shares to mint. Minimum 1_000_000 (1 full share).
+                             This is the permanent total supply — never increases.
+    revenue_share_recipient — Who receives genesis RS shares. Defaults to signer.
+    provider_treasury     — Address for the provider's direct cut. Required when providerTreasuryBp > 0.
+    provider_treasury_bp — Basis points routed to provider treasury directly.
+                             Set 0 to route everything (minus protocol) to RS holders.
+    metadata_uri           — IPFS URI for provider metadata. When set, registers in APIIntegrityRegistry.
 
-    At least one of vault_bp or revenue_share_bp must be > 0.
-
-    vault_genesis_shares    — raw share units (6 dec). e.g. 1_000_000_000_000 = 1M shares.
-                              Set 0 to skip genesis mint (first investor deposits at 1:1).
-    vault_genesis_recipient — who receives vault genesis shares. Defaults to signer.
-    genesis_deposit         — USDC raw units to seed vault so share price > 0.
-                              Requires vault_genesis_shares > 0.
-    provider_treasury       — address for the remainder direct USDC cut.
-                              Required when remainder bp > 0.
-    revenue_share_shares    — genesis shares for the revenue share contract.
-                              Required when revenue_share_bp > 0.
-    revenue_share_recipient — who receives revenue share genesis shares. Defaults to signer.
-    metadata_uri            — IPFS URI or URL for provider metadata. When non-empty and the
-                              factory has a registry configured, registers the provider in
-                              APIIntegrityRegistry in the same transaction.
-
-    Returns (vault_address, revenue_share_address, splitter_address, registry_provider_id).
-    vault_address / revenue_share_address are zero address when not deployed.
-    registry_provider_id is 0 when metadata_uri is empty or registry not configured.
+    Returns (revenue_share_address, splitter_address, registry_provider_id).
     """
-    remainder = MAX_PROVIDER_BP - vault_bp - revenue_share_bp
-
     ZERO = "0x0000000000000000000000000000000000000000"
 
     # Ensure sufficient stake before attempting registry registration
     if registry is not None:
         ensure_staked()
 
-    print(f"\n→ deployProvider({vault_name!r}, {vault_symbol!r})")
-    print(f"  vaultBp={vault_bp / 100:.2f}%  revenueShareBp={revenue_share_bp / 100:.2f}%  "
-          f"protocolBp={PROTOCOL_BP / 100:.2f}%  providerTreasury(remainder)={remainder / 100:.2f}%")
+    print(f"\n→ deployProvider({rs_name!r}, {rs_symbol!r})")
+    print(f"  protocolBp={PROTOCOL_BP / 100:.2f}%  providerTreasuryBp={provider_treasury_bp / 100:.2f}%")
+    print(f"  → revenueShareBp auto-computed as remainder")
     if metadata_uri:
         print(f"  metadataURI={metadata_uri!r} → will register in APIIntegrityRegistry")
 
-    if genesis_deposit > 0:
-        print(f"  approving factory for genesis deposit ({genesis_deposit / 1e6:.2f} USDC)…")
-        send_tx(w3, account, usdc.functions.approve(factory_address, genesis_deposit), "approve")
-
-    treasury_addr = provider_treasury if remainder > 0 else ZERO
+    treasury_addr = provider_treasury if provider_treasury_bp > 0 else ZERO
+    revenue_share_bp = MAX_PROVIDER_BP - provider_treasury_bp
 
     receipt = send_tx(
         w3, account,
         factory.functions.deployProvider(
-            vault_name,
-            vault_symbol,
-            vault_bp,
-            vault_genesis_shares,
-            vault_genesis_recipient or (account.address if vault_genesis_shares > 0 else ZERO),
-            genesis_deposit,
-            treasury_addr,
-            revenue_share_bp,
+            rs_name,
+            rs_symbol,
             revenue_share_shares,
-            revenue_share_recipient or (account.address if revenue_share_bp > 0 else ZERO),
+            revenue_share_recipient or account.address,
+            treasury_addr,
+            provider_treasury_bp,
             metadata_uri,
         ),
         "deployProvider",
@@ -314,7 +285,6 @@ def deploy_provider(
 
     # Parse ProviderDeployed event from factory
     event = factory.events.ProviderDeployed().process_receipt(receipt, errors=DISCARD)[0]
-    vault_addr         = event["args"]["vault"]
     revenue_share_addr = event["args"]["revenueShare"]
     splitter_addr      = event["args"]["splitter"]
 
@@ -325,9 +295,7 @@ def deploy_provider(
         if reg_events:
             registry_provider_id = reg_events[0]["args"]["id"]
 
-    print(f"\n  ✓ vault        : {vault_addr}")
-    if revenue_share_addr != ZERO:
-        print(f"  ✓ revenueShare : {revenue_share_addr}")
+    print(f"\n  ✓ revenueShare : {revenue_share_addr}")
     print(f"  ✓ splitter     : {splitter_addr}")
     if registry_provider_id:
         print(f"  ✓ registry id  : {registry_provider_id}  ← use for registerEndpoint()")
@@ -339,38 +307,30 @@ def deploy_provider(
     print()
     protocol_treasury = factory.functions.protocolTreasury().call()
 
-    if vault_addr != ZERO:
-        ctor = abi_encode(
-            ["address", "string", "string", "address"],
-            [usdc_address, vault_name, vault_symbol, account.address],
-        ).hex()
-        verify_contract("ProviderRevenueVault", vault_addr, ctor)
+    # Verify RS
+    ctor = abi_encode(
+        ["address", "string", "string", "address"],
+        [usdc_address, rs_name, rs_symbol, account.address],
+    ).hex()
+    verify_contract("ProviderRevenueShare", revenue_share_addr, ctor)
 
-    if revenue_share_addr != ZERO:
-        rs_name   = vault_name + " Revenue Share"
-        rs_symbol = vault_symbol + "RS"
-        ctor = abi_encode(
-            ["address", "string", "string", "address"],
-            [usdc_address, rs_name, rs_symbol, account.address],
-        ).hex()
-        verify_contract("ProviderRevenueShare", revenue_share_addr, ctor)
-
+    # Verify Splitter
     splitter_ctor = abi_encode(
-        ["address", "address", "uint256", "address", "uint256", "address", "uint256", "address"],
+        ["address", "address", "uint256", "address", "address", "uint256", "address", "uint256"],
         [
             usdc_address,
-            protocol_treasury,
+            protocol_treasury,   # protocolAdmin
             PROTOCOL_BP,
-            treasury_addr,
-            remainder,
-            revenue_share_addr,
+            account.address,     # providerAdmin
+            treasury_addr,       # providerTreasury
+            provider_treasury_bp,
+            revenue_share_addr,  # revenueShare
             revenue_share_bp,
-            vault_addr,
         ],
     ).hex()
     verify_contract("ProviderRevenueSplitter", splitter_addr, splitter_ctor)
 
-    return vault_addr, revenue_share_addr, splitter_addr, registry_provider_id
+    return revenue_share_addr, splitter_addr, registry_provider_id
 
 
 def simulate_revenue(splitter_address: str, amount_usdc_units: int):
@@ -396,55 +356,74 @@ def simulate_revenue(splitter_address: str, amount_usdc_units: int):
     send_tx(w3, account, splitter.functions.distribute(), "distribute")
 
 
-def redeem_shares(vault_address: str, shares: int, receiver: str = None):
+def claim_revenue(revenue_share_address: str):
     """
-    Redeem vault shares for proportional USDC.
-    receiver defaults to the signer's address.
+    Claim accumulated dividends from the revenue share contract.
     """
-    vault    = w3.eth.contract(address=w3.to_checksum_address(vault_address), abi=vault_abi)
-    receiver = receiver or account.address
-    print(f"\n→ redeem({shares} shares) → {receiver}")
-    return send_tx(
-        w3, account,
-        vault.functions.redeem(shares, receiver, account.address),
-        "redeem",
+    rs = w3.eth.contract(
+        address=w3.to_checksum_address(revenue_share_address),
+        abi=revenue_share_abi,
     )
+    claimable = rs.functions.claimable(account.address).call()
+    if claimable == 0:
+        print(f"\n  nothing to claim")
+        return
+    print(f"\n→ claim({claimable / 1e6:.6f} USDC)")
+    send_tx(w3, account, rs.functions.claim(account.address), "claim")
 
 
 def register_endpoint(
     provider_id: int,
     path: str,
     method: str,
-    integrity_hash: bytes | str = "",
-    splitter: str = "",
+    pay_to: str = "",
+    asset: str = "",
+    network: str = "",
+    url: str = "",
+    amount: int = 0,
 ) -> str:
     """
     Register an API endpoint in the APIIntegrityRegistry.
 
     Must be called by the provider (registry owner of provider_id).
-    provider_id     — the registry ID returned by deploy_provider() (1-based).
-    path            — full API URL, e.g. "https://api.example.com/v1/price"
-    method          — HTTP method, e.g. "GET" or "POST"
-    integrity_hash  — bytes32 hash of the x402 payment metadata.
-                      Pass as 0x-prefixed hex string or raw bytes.
-                      If omitted, fetches the hash live from path via fetch_integrity_hash().
+    provider_id  — the registry ID returned by deploy_provider() (1-based).
+    path        — full API URL, e.g. "https://api.example.com/v1/price"
+    method      — HTTP method, e.g. "GET" or "POST"
+    pay_to      — optional. Pass address(0) or omit to use provider's revenueSplitter.
+    asset       — payment asset address (e.g. USDC)
+    network     — CAIP network ID (e.g. "eip155:43113")
+    url         — the URL being registered (should match path or resource.url)
+    amount      — payment amount in smallest units
 
     Returns the endpointId (hex string) emitted by EndpointRegistered.
     """
+    from x402_metadata import fetch_payment_metadata
+
     if registry is None:
         raise RuntimeError("No registry configured on this factory")
 
-    if not integrity_hash:
-        print(f"  fetching integrity hash from {path} …")
-        integrity_hash = fetch_integrity_hash(path, verbose=True, expected_pay_to=splitter)
+    # If metadata not provided, fetch from endpoint
+    needs_fetch = not all([asset, network, url, amount]) or pay_to == ""
+    if needs_fetch:
+        print(f"  fetching payment metadata from {path} …")
+        metadata = fetch_payment_metadata(path)
+        pay_to = pay_to or metadata.get("payTo", "")
+        asset = asset or metadata.get("asset", "")
+        network = network or metadata.get("network", "")
+        url = url or metadata.get("url", "")
+        amount = amount or int(metadata.get("amount", 0))
 
-    if isinstance(integrity_hash, str):
-        integrity_hash = bytes.fromhex(integrity_hash.removeprefix("0x"))
+    # Convert to checksum addresses (use address(0) if not provided to use revenueSplitter)
+    pay_to_addr = w3.to_checksum_address(pay_to) if pay_to else "0x" + "00" * 20
+    asset_addr = w3.to_checksum_address(asset) if asset else "0x" + "00" * 20
 
     print(f"\n→ registerEndpoint(providerId={provider_id}, {method} {path})")
+    print(f"  payTo={pay_to_addr} asset={asset_addr} network={network} amount={amount}")
     receipt = send_tx(
         w3, account,
-        registry.functions.registerEndpoint(provider_id, path, method, integrity_hash),
+        registry.functions.registerEndpoint(
+            provider_id, path, method, pay_to_addr, asset_addr, network, url, amount
+        ),
         "registerEndpoint",
     )
 
@@ -481,95 +460,36 @@ if __name__ == "__main__":
     print_factory_state()
 
     # ── Read previously deployed contracts (set these in .env or paste directly)
-    vault_address         = os.getenv("VAULT_ADDRESS", "")
     revenue_share_address = os.getenv("REVENUE_SHARE_ADDRESS", "")
     splitter_address      = os.getenv("SPLITTER_ADDRESS", "")
 
-    if vault_address:
-        print_vault_state(vault_address)
     if revenue_share_address:
-        # Revenue share state: balances, claimable, etc.
-        rs = w3.eth.contract(
-            address=w3.to_checksum_address(revenue_share_address),
-            abi=revenue_share_abi,
-        )
-        total_dist   = rs.functions.totalDistributed().call()
-        total_claimed= rs.functions.totalClaimed().call()
-        claimable    = rs.functions.claimable(account.address).call()
-        supply       = rs.functions.totalSupply().call()
-        balance      = rs.functions.balanceOf(account.address).call()
-        print(f"\n── RevenueShare {revenue_share_address} ──────────────────")
-        print(f"  totalSupply     : {supply / 1e6:.6f} shares")
-        print(f"  signer balance  : {balance / 1e6:.6f} shares")
-        print(f"  totalDistributed: {total_dist / 1e6:.6f} USDC")
-        print(f"  totalClaimed    : {total_claimed / 1e6:.6f} USDC")
-        print(f"  claimable now   : {claimable / 1e6:.6f} USDC")
-        print("──────────────────────────────────────────────────────────────────\n")
+        print_revenue_share_state(revenue_share_address)
     if splitter_address:
         print_splitter_state(splitter_address)
 
     # ── Example write calls (uncomment to execute) ──────────────────────────
     #
-    # Set vault_bp and revenue_share_bp explicitly.
-    # The remainder (100% - protocol% - vault% - rs%) goes to provider_treasury directly.
-    # Assuming protocolTreasuryBp = 200 (2%):
+    # Revenue split examples (assuming protocolTreasuryBp = 200 bp = 2%):
     #
-    #   vault_bp=9800, revenue_share_bp=0    → vault 98%, you 0%  (vault only)
-    #   vault_bp=0,    revenue_share_bp=9800 → RS 98%,    you 0%  (RS only)
-    #   vault_bp=7800, revenue_share_bp=2000 → vault 78%, RS 20%, you 0%
-    #   vault_bp=5000, revenue_share_bp=2000 → vault 50%, RS 20%, you 28% direct
+    #   providerTreasuryBp=0    → RS gets 98%, you get 0% direct
+    #   providerTreasuryBp=1000 → RS gets 88%, you get 10% direct
+    #   providerTreasuryBp=5000 → RS gets 48%, you get 50% direct
 
-    # ── MODE A: Vault only ───────────────────────────────────────────────────
-    # vault_addr, _, splitter_addr, reg_id = deploy_provider(
-    #     vault_name   = "Weather API Vault",
-    #     vault_symbol = "wrvAPI",
-    #     vault_bp     = 9_800,          # 98% to vault; protocol gets 2%; you get 0% direct 
-    #     vault_genesis_shares= 1000000000000, #Optional, 1 million
-    #     metadata_uri = "https://placeholder",
-    # )
-    # print_vault_state(vault_addr)
-    # print_splitter_state(splitter_addr)
-    # print(f'now you can set splitter as the payTo')
-    # breakpoint()
-
-    # ── MODE B: Revenue share only ───────────────────────────────────────────
-    _, rs_addr, splitter_addr, reg_id = deploy_provider(
-        vault_name           = "Weather API 5",
-        vault_symbol         = "wv5API",
-        vault_bp             = 0,              # no vault
-        revenue_share_bp     = 9_800,          # 98% to RS; protocol gets 2%; you get 0% direct
-        revenue_share_shares = 1_000_000_000_000,  # 1M founder shares (6 dec)
-        metadata_uri         = "ipfs://Qm...",
+    # ── Deploy RS only ──────────────────────────────────────────────────────
+    rs_addr, spl_addr, reg_id = deploy_provider(
+        rs_name               = "Weather API RS",
+        rs_symbol             = "WRS",
+        revenue_share_shares  = 1_000_000_000_000,  # 1M founder shares (6 dec)
+        revenue_share_recipient = account.address,
+        provider_treasury     = account.address,
+        provider_treasury_bp  = 0,  # 0% direct, 98% to RS holders
+        metadata_uri          = " ",
     )
-    print_splitter_state(splitter_addr)
+    print(f"reg_id: {reg_id}")
+    print_splitter_state(spl_addr)
 
-    # ── MODE C: Two-tier, all revenue shared ────────────────────────────────
-    # vault_addr, rs_addr, splitter_addr, reg_id = deploy_provider(
-    #     vault_name           = "Weather API Vault",
-    #     vault_symbol         = "wrvAPI",
-    #     vault_bp             = 7_800,          # 78% to vault investors
-    #     revenue_share_bp     = 2_000,          # 20% to founder RS; protocol 2%; you 0% direct
-    #     revenue_share_shares = 1_000_000_000_000,
-    #     metadata_uri         = "ipfs://Qm...",
-    # )
-    # print_vault_state(vault_addr)
-    # print_splitter_state(splitter_addr)
-
-    # ── MODE D: Three-way split ──────────────────────────────────────────────
-    # vault_addr, rs_addr, splitter_addr, reg_id = deploy_provider(
-    #     vault_name           = "Weather API Vault",
-    #     vault_symbol         = "wrvAPI",
-    #     vault_bp             = 5_000,          # 50% to vault investors
-    #     revenue_share_bp     = 2_000,          # 20% to founder RS
-    #     revenue_share_shares = 1_000_000_000_000,
-    #     provider_treasury    = account.address, # 28% direct to you (remainder)
-    #     metadata_uri         = "ipfs://Qm...",
-    # )
-    # print_vault_state(vault_addr)
-    # print_splitter_state(splitter_addr)
-    # print_registry_provider(reg_id)
-    #
-    # # Register API endpoints after deploying (one call per route):
+    # ── Register API endpoints after deploying ───────────────────────────────
     url_path = os.getenv("X402_ENDPOINT")
     print(f'url_path: {url_path}')
     breakpoint()
@@ -577,13 +497,12 @@ if __name__ == "__main__":
         provider_id = reg_id,
         path        = url_path,
         method      = "GET",
-        splitter    = splitter_addr,
     )
     # print_registry_endpoint(endpoint_id)
 
-    # ── Simulate revenue (any mode) ──────────────────────────────────────────
-    # simulate_revenue(splitter_address, 10_000_000)   # 10 USDC → routes per split
-    # print_vault_state(vault_address)                 # share price rises (vault modes)
+    # ── Simulate revenue ─────────────────────────────────────────────────────
+    # simulate_revenue(spl_addr, 10_000_000)   # 10 USDC → routes per split
+    # print_revenue_share_state(rs_addr)
 
-    # ── Redeem vault shares for USDC (vault modes) ───────────────────────────
-    # redeem_shares(vault_address, shares=1_000_000)   # redeem 1 share
+    # ── Claim dividends ──────────────────────────────────────────────────────
+    # claim_revenue(rs_addr)

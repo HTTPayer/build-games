@@ -33,6 +33,9 @@ contracts/broadcast/
 !contracts/broadcast/DeployAll.s.sol/
 !contracts/broadcast/DeployAll.s.sol/43113/
 !contracts/broadcast/DeployAll.s.sol/43113/run-latest.json
+!contracts/broadcast/DeployWrappedRevenueShare.s.sol/
+!contracts/broadcast/DeployWrappedRevenueShare.s.sol/43113/
+!contracts/broadcast/DeployWrappedRevenueShare.s.sol/43113/run-latest.json
 
 # Drop local anvil + dry-run artifacts
 contracts/broadcast/*/31337/
@@ -60,6 +63,11 @@ contracts/scripts/challenger_watcher_state.json
 
 # Analytics runtime state
 contracts/scripts/analytics_state.json
+analytics/analytics_state.json
+analytics/analytics.db
+
+# Challenger watcher state
+challenger_watcher/challenger_watcher_state.json
 
 # SQLite databases (runtime artifacts)
 *.db

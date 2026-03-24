@@ -1,436 +1,362 @@
-[
-  {
-    "type": "constructor",
-    "inputs": [
-      {
-        "name": "_usdc",
-        "type": "address",
-        "internalType": "contract IERC20"
-      },
-      {
-        "name": "_protocolTreasury",
-        "type": "address",
-        "internalType": "address"
-      },
-      {
-        "name": "_protocolTreasuryBp",
-        "type": "uint256",
-        "internalType": "uint256"
-      },
-      {
-        "name": "_registry",
-        "type": "address",
-        "internalType": "address"
-      }
-    ],
-    "stateMutability": "nonpayable"
-  },
-  {
-    "type": "function",
-    "name": "MAX_PROTOCOL_BP",
-    "inputs": [],
-    "outputs": [
-      {
-        "name": "",
-        "type": "uint256",
-        "internalType": "uint256"
-      }
-    ],
-    "stateMutability": "view"
-  },
-  {
-    "type": "function",
-    "name": "USDC",
-    "inputs": [],
-    "outputs": [
-      {
-        "name": "",
-        "type": "address",
-        "internalType": "contract IERC20"
-      }
-    ],
-    "stateMutability": "view"
-  },
-  {
-    "type": "function",
-    "name": "deployProvider",
-    "inputs": [
-      {
-        "name": "vaultName",
-        "type": "string",
-        "internalType": "string"
-      },
-      {
-        "name": "vaultSymbol",
-        "type": "string",
-        "internalType": "string"
-      },
-      {
-        "name": "vaultBp",
-        "type": "uint256",
-        "internalType": "uint256"
-      },
-      {
-        "name": "vaultGenesisShares",
-        "type": "uint256",
-        "internalType": "uint256"
-      },
-      {
-        "name": "vaultGenesisRecipient",
-        "type": "address",
-        "internalType": "address"
-      },
-      {
-        "name": "genesisDeposit",
-        "type": "uint256",
-        "internalType": "uint256"
-      },
-      {
-        "name": "providerTreasury",
-        "type": "address",
-        "internalType": "address"
-      },
-      {
-        "name": "revenueShareBp",
-        "type": "uint256",
-        "internalType": "uint256"
-      },
-      {
-        "name": "revenueShareShares",
-        "type": "uint256",
-        "internalType": "uint256"
-      },
-      {
-        "name": "revenueShareRecipient",
-        "type": "address",
-        "internalType": "address"
-      },
-      {
-        "name": "metadataURI",
-        "type": "string",
-        "internalType": "string"
-      }
-    ],
-    "outputs": [
-      {
-        "name": "vaultAddr",
-        "type": "address",
-        "internalType": "address"
-      },
-      {
-        "name": "revenueShareAddr",
-        "type": "address",
-        "internalType": "address"
-      },
-      {
-        "name": "splitterAddr",
-        "type": "address",
-        "internalType": "address"
-      }
-    ],
-    "stateMutability": "nonpayable"
-  },
-  {
-    "type": "function",
-    "name": "getProvider",
-    "inputs": [
-      {
-        "name": "index",
-        "type": "uint256",
-        "internalType": "uint256"
-      }
-    ],
-    "outputs": [
-      {
-        "name": "",
-        "type": "tuple",
-        "internalType": "struct APIRegistryFactory.ProviderRecord",
-        "components": [
-          {
-            "name": "deployer",
-            "type": "address",
-            "internalType": "address"
-          },
-          {
-            "name": "vault",
-            "type": "address",
-            "internalType": "address"
-          },
-          {
-            "name": "revenueShare",
-            "type": "address",
-            "internalType": "address"
-          },
-          {
-            "name": "splitter",
-            "type": "address",
-            "internalType": "address"
-          },
-          {
-            "name": "deployedAt",
-            "type": "uint256",
-            "internalType": "uint256"
-          }
-        ]
-      }
-    ],
-    "stateMutability": "view"
-  },
-  {
-    "type": "function",
-    "name": "getProviderBySplitter",
-    "inputs": [
-      {
-        "name": "splitter",
-        "type": "address",
-        "internalType": "address"
-      }
-    ],
-    "outputs": [
-      {
-        "name": "",
-        "type": "tuple",
-        "internalType": "struct APIRegistryFactory.ProviderRecord",
-        "components": [
-          {
-            "name": "deployer",
-            "type": "address",
-            "internalType": "address"
-          },
-          {
-            "name": "vault",
-            "type": "address",
-            "internalType": "address"
-          },
-          {
-            "name": "revenueShare",
-            "type": "address",
-            "internalType": "address"
-          },
-          {
-            "name": "splitter",
-            "type": "address",
-            "internalType": "address"
-          },
-          {
-            "name": "deployedAt",
-            "type": "uint256",
-            "internalType": "uint256"
-          }
-        ]
-      }
-    ],
-    "stateMutability": "view"
-  },
-  {
-    "type": "function",
-    "name": "getProviderCountByDeployer",
-    "inputs": [
-      {
-        "name": "deployer",
-        "type": "address",
-        "internalType": "address"
-      }
-    ],
-    "outputs": [
-      {
-        "name": "",
-        "type": "uint256",
-        "internalType": "uint256"
-      }
-    ],
-    "stateMutability": "view"
-  },
-  {
-    "type": "function",
-    "name": "getProviderIndicesByDeployer",
-    "inputs": [
-      {
-        "name": "deployer",
-        "type": "address",
-        "internalType": "address"
-      }
-    ],
-    "outputs": [
-      {
-        "name": "",
-        "type": "uint256[]",
-        "internalType": "uint256[]"
-      }
-    ],
-    "stateMutability": "view"
-  },
-  {
-    "type": "function",
-    "name": "isRegisteredSplitter",
-    "inputs": [
-      {
-        "name": "splitter",
-        "type": "address",
-        "internalType": "address"
-      }
-    ],
-    "outputs": [
-      {
-        "name": "",
-        "type": "bool",
-        "internalType": "bool"
-      }
-    ],
-    "stateMutability": "view"
-  },
-  {
-    "type": "function",
-    "name": "protocolTreasury",
-    "inputs": [],
-    "outputs": [
-      {
-        "name": "",
-        "type": "address",
-        "internalType": "address"
-      }
-    ],
-    "stateMutability": "view"
-  },
-  {
-    "type": "function",
-    "name": "protocolTreasuryBp",
-    "inputs": [],
-    "outputs": [
-      {
-        "name": "",
-        "type": "uint256",
-        "internalType": "uint256"
-      }
-    ],
-    "stateMutability": "view"
-  },
-  {
-    "type": "function",
-    "name": "providerCount",
-    "inputs": [],
-    "outputs": [
-      {
-        "name": "",
-        "type": "uint256",
-        "internalType": "uint256"
-      }
-    ],
-    "stateMutability": "view"
-  },
-  {
-    "type": "function",
-    "name": "registry",
-    "inputs": [],
-    "outputs": [
-      {
-        "name": "",
-        "type": "address",
-        "internalType": "contract IAPIIntegrityRegistry"
-      }
-    ],
-    "stateMutability": "view"
-  },
-  {
-    "type": "event",
-    "name": "ProviderDeployed",
-    "inputs": [
-      {
-        "name": "deployer",
-        "type": "address",
-        "indexed": true,
-        "internalType": "address"
-      },
-      {
-        "name": "vault",
-        "type": "address",
-        "indexed": true,
-        "internalType": "address"
-      },
-      {
-        "name": "splitter",
-        "type": "address",
-        "indexed": true,
-        "internalType": "address"
-      },
-      {
-        "name": "revenueShare",
-        "type": "address",
-        "indexed": false,
-        "internalType": "address"
-      },
-      {
-        "name": "vaultGenesisRecipient",
-        "type": "address",
-        "indexed": false,
-        "internalType": "address"
-      },
-      {
-        "name": "vaultGenesisShares",
-        "type": "uint256",
-        "indexed": false,
-        "internalType": "uint256"
-      },
-      {
-        "name": "genesisDeposit",
-        "type": "uint256",
-        "indexed": false,
-        "internalType": "uint256"
-      },
-      {
-        "name": "revenueShareRecipient",
-        "type": "address",
-        "indexed": false,
-        "internalType": "address"
-      },
-      {
-        "name": "revenueShareShares",
-        "type": "uint256",
-        "indexed": false,
-        "internalType": "uint256"
-      },
-      {
-        "name": "providerTreasury",
-        "type": "address",
-        "indexed": false,
-        "internalType": "address"
-      },
-      {
-        "name": "protocolTreasuryBp",
-        "type": "uint256",
-        "indexed": false,
-        "internalType": "uint256"
-      },
-      {
-        "name": "providerTreasuryBp",
-        "type": "uint256",
-        "indexed": false,
-        "internalType": "uint256"
-      },
-      {
-        "name": "revenueShareBp",
-        "type": "uint256",
-        "indexed": false,
-        "internalType": "uint256"
-      },
-      {
-        "name": "vaultBp",
-        "type": "uint256",
-        "indexed": false,
-        "internalType": "uint256"
-      }
-    ],
-    "anonymous": false
-  },
-  {
-    "type": "error",
-    "name": "SafeERC20FailedOperation",
-    "inputs": [
-      {
-        "name": "token",
-        "type": "address",
-        "internalType": "address"
-      }
-    ]
-  }
-]
+{
+  "abi": [
+    {
+      "type": "constructor",
+      "inputs": [
+        {
+          "name": "_usdc",
+          "type": "address",
+          "internalType": "contract IERC20"
+        },
+        {
+          "name": "_protocolTreasury",
+          "type": "address",
+          "internalType": "address"
+        },
+        {
+          "name": "_protocolTreasuryBp",
+          "type": "uint256",
+          "internalType": "uint256"
+        },
+        {
+          "name": "_registry",
+          "type": "address",
+          "internalType": "address"
+        }
+      ],
+      "stateMutability": "nonpayable"
+    },
+    {
+      "type": "function",
+      "name": "MAX_PROTOCOL_BP",
+      "inputs": [],
+      "outputs": [
+        {
+          "name": "",
+          "type": "uint256",
+          "internalType": "uint256"
+        }
+      ],
+      "stateMutability": "view"
+    },
+    {
+      "type": "function",
+      "name": "USDC",
+      "inputs": [],
+      "outputs": [
+        {
+          "name": "",
+          "type": "address",
+          "internalType": "contract IERC20"
+        }
+      ],
+      "stateMutability": "view"
+    },
+    {
+      "type": "function",
+      "name": "deployProvider",
+      "inputs": [
+        {
+          "name": "rsName",
+          "type": "string",
+          "internalType": "string"
+        },
+        {
+          "name": "rsSymbol",
+          "type": "string",
+          "internalType": "string"
+        },
+        {
+          "name": "revenueShareShares",
+          "type": "uint256",
+          "internalType": "uint256"
+        },
+        {
+          "name": "revenueShareRecipient",
+          "type": "address",
+          "internalType": "address"
+        },
+        {
+          "name": "providerTreasury",
+          "type": "address",
+          "internalType": "address"
+        },
+        {
+          "name": "providerTreasuryBp",
+          "type": "uint256",
+          "internalType": "uint256"
+        },
+        {
+          "name": "metadataURI",
+          "type": "string",
+          "internalType": "string"
+        }
+      ],
+      "outputs": [
+        {
+          "name": "revenueShareAddr",
+          "type": "address",
+          "internalType": "address"
+        },
+        {
+          "name": "splitterAddr",
+          "type": "address",
+          "internalType": "address"
+        }
+      ],
+      "stateMutability": "nonpayable"
+    },
+    {
+      "type": "function",
+      "name": "getProvider",
+      "inputs": [
+        {
+          "name": "index",
+          "type": "uint256",
+          "internalType": "uint256"
+        }
+      ],
+      "outputs": [
+        {
+          "name": "",
+          "type": "tuple",
+          "internalType": "struct APIRegistryFactory.ProviderRecord",
+          "components": [
+            {
+              "name": "deployer",
+              "type": "address",
+              "internalType": "address"
+            },
+            {
+              "name": "revenueShare",
+              "type": "address",
+              "internalType": "address"
+            },
+            {
+              "name": "splitter",
+              "type": "address",
+              "internalType": "address"
+            },
+            {
+              "name": "deployedAt",
+              "type": "uint256",
+              "internalType": "uint256"
+            }
+          ]
+        }
+      ],
+      "stateMutability": "view"
+    },
+    {
+      "type": "function",
+      "name": "getProviderBySplitter",
+      "inputs": [
+        {
+          "name": "splitter",
+          "type": "address",
+          "internalType": "address"
+        }
+      ],
+      "outputs": [
+        {
+          "name": "",
+          "type": "tuple",
+          "internalType": "struct APIRegistryFactory.ProviderRecord",
+          "components": [
+            {
+              "name": "deployer",
+              "type": "address",
+              "internalType": "address"
+            },
+            {
+              "name": "revenueShare",
+              "type": "address",
+              "internalType": "address"
+            },
+            {
+              "name": "splitter",
+              "type": "address",
+              "internalType": "address"
+            },
+            {
+              "name": "deployedAt",
+              "type": "uint256",
+              "internalType": "uint256"
+            }
+          ]
+        }
+      ],
+      "stateMutability": "view"
+    },
+    {
+      "type": "function",
+      "name": "getProviderCountByDeployer",
+      "inputs": [
+        {
+          "name": "deployer",
+          "type": "address",
+          "internalType": "address"
+        }
+      ],
+      "outputs": [
+        {
+          "name": "",
+          "type": "uint256",
+          "internalType": "uint256"
+        }
+      ],
+      "stateMutability": "view"
+    },
+    {
+      "type": "function",
+      "name": "getProviderIndicesByDeployer",
+      "inputs": [
+        {
+          "name": "deployer",
+          "type": "address",
+          "internalType": "address"
+        }
+      ],
+      "outputs": [
+        {
+          "name": "",
+          "type": "uint256[]",
+          "internalType": "uint256[]"
+        }
+      ],
+      "stateMutability": "view"
+    },
+    {
+      "type": "function",
+      "name": "isRegisteredSplitter",
+      "inputs": [
+        {
+          "name": "splitter",
+          "type": "address",
+          "internalType": "address"
+        }
+      ],
+      "outputs": [
+        {
+          "name": "",
+          "type": "bool",
+          "internalType": "bool"
+        }
+      ],
+      "stateMutability": "view"
+    },
+    {
+      "type": "function",
+      "name": "protocolTreasury",
+      "inputs": [],
+      "outputs": [
+        {
+          "name": "",
+          "type": "address",
+          "internalType": "address"
+        }
+      ],
+      "stateMutability": "view"
+    },
+    {
+      "type": "function",
+      "name": "protocolTreasuryBp",
+      "inputs": [],
+      "outputs": [
+        {
+          "name": "",
+          "type": "uint256",
+          "internalType": "uint256"
+        }
+      ],
+      "stateMutability": "view"
+    },
+    {
+      "type": "function",
+      "name": "providerCount",
+      "inputs": [],
+      "outputs": [
+        {
+          "name": "",
+          "type": "uint256",
+          "internalType": "uint256"
+        }
+      ],
+      "stateMutability": "view"
+    },
+    {
+      "type": "function",
+      "name": "registry",
+      "inputs": [],
+      "outputs": [
+        {
+          "name": "",
+          "type": "address",
+          "internalType": "contract IAPIIntegrityRegistry"
+        }
+      ],
+      "stateMutability": "view"
+    },
+    {
+      "type": "event",
+      "name": "ProviderDeployed",
+      "inputs": [
+        {
+          "name": "deployer",
+          "type": "address",
+          "indexed": true,
+          "internalType": "address"
+        },
+        {
+          "name": "revenueShare",
+          "type": "address",
+          "indexed": true,
+          "internalType": "address"
+        },
+        {
+          "name": "splitter",
+          "type": "address",
+          "indexed": true,
+          "internalType": "address"
+        },
+        {
+          "name": "revenueShareRecipient",
+          "type": "address",
+          "indexed": false,
+          "internalType": "address"
+        },
+        {
+          "name": "revenueShareShares",
+          "type": "uint256",
+          "indexed": false,
+          "internalType": "uint256"
+        },
+        {
+          "name": "providerTreasury",
+          "type": "address",
+          "indexed": false,
+          "internalType": "address"
+        },
+        {
+          "name": "protocolTreasuryBp",
+          "type": "uint256",
+          "indexed": false,
+          "internalType": "uint256"
+        },
+        {
+          "name": "providerTreasuryBp",
+          "type": "uint256",
+          "indexed": false,
+          "internalType": "uint256"
+        },
+        {
+          "name": "revenueShareBp",
+          "type": "uint256",
+          "indexed": false,
+          "internalType": "uint256"
+        }
+      ],
+      "anonymous": false
+    }
+  ]
+}

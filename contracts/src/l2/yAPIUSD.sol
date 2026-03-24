@@ -306,7 +306,7 @@ contract yAPIUSD is ERC20, Pausable, ReentrancyGuard {
     function _harvest() internal returns (uint256 claimed) {
         claimed = rs.claimable(address(this));
         if (claimed == 0) return 0;
-        rs.claim();
+        rs.claim(address(this));
         emit Harvested(claimed);
     }
 

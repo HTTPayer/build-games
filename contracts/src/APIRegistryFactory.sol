@@ -172,7 +172,9 @@ contract APIRegistryFactory {
      *
      * @param rsName                ERC20 name for the RS token (e.g. "My API Revenue Share").
      * @param rsSymbol              ERC20 symbol for the RS token (e.g. "MARSRS").
-     * @param revenueShareShares    Genesis shares to mint (raw units, 6 decimals). Required > 0.
+     * @param revenueShareShares    Genesis shares to mint (raw units, 6 decimals).
+     *                              Minimum 1 full share (1_000_000 raw units). This is
+     *                              the permanent total supply — it can never be increased.
      * @param revenueShareRecipient Receives genesis shares. Defaults to msg.sender.
      * @param providerTreasury      Provider's direct cut destination.
      *                              Required when providerTreasuryBp > 0.
@@ -198,8 +200,8 @@ contract APIRegistryFactory {
         uint256 allocatedBp    = protocolTreasuryBp + providerTreasuryBp;
         uint256 revenueShareBp = 10_000 - allocatedBp; // underflow reverts if > 100%
 
-        require(allocatedBp <= 10_000,       "bp exceeds 100%");
-        require(revenueShareShares > 0,      "genesis shares required");
+        require(allocatedBp <= 10_000,                        "bp exceeds 100%");
+        require(revenueShareShares >= 1_000_000,               "min 1 full share (1e6)"); // 6-decimal token
         require(
             providerTreasuryBp == 0 || providerTreasury != address(0),
             "provider treasury required when bp > 0"
@@ -254,6 +256,7 @@ contract APIRegistryFactory {
         // 5. Optional: register in APIIntegrityRegistry
         // ------------------------------------------------------------------
         if (address(registry) != address(0)) {
+            // Always register provider, even with empty metadataURI for testnet
             registry.registerProvider(
                 msg.sender,
                 metadataURI,

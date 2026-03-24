@@ -346,7 +346,7 @@ contract APIUSD is ERC20, Pausable, ReentrancyGuard {
         uint256 claimable = rs.claimable(address(this));
         if (claimable == 0 || totalRSHeld == 0) return;
 
-        rs.claim();
+        rs.claim(address(this));
         accUsdcPerRawShare += (claimable * PRECISION) / totalRSHeld;
 
         emit Harvested(claimable, accUsdcPerRawShare);

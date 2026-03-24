@@ -15,7 +15,7 @@ import {
 	TxStatus,
 } from '@chainlink/cre-sdk'
 import { decodeAbiParameters, encodeAbiParameters } from 'viem'
-import { sha256 } from '@noble/hashes/sha256'
+import { keccak256 } from 'viem'
 import { z } from 'zod'
 
 // ---------------------------------------------------------------------------
@@ -47,8 +47,8 @@ interface VerifyResult {
 }
 
 // ---------------------------------------------------------------------------
-// SHA-256 (synchronous — mirrors dry-run.js exactly)
-// Uses @noble/hashes which is sync and works in Deno/CRE environment.
+// keccak256 hash computation (matches on-chain _computeIntegrityHash)
+// Uses viem's keccak256 which works in CRE environment.
 // ---------------------------------------------------------------------------
 
 function computeIntegrityHash(metadata: {
@@ -58,16 +58,27 @@ function computeIntegrityHash(metadata: {
 	payTo: string
 	url: string
 }): string {
-	const dataString = JSON.stringify(metadata, Object.keys(metadata).sort() as any)
-	const hashBytes = sha256(new TextEncoder().encode(dataString))
-	return '0x' + Array.from(hashBytes).map(b => b.toString(16).padStart(2, '0')).join('')
+	// Convert addresses to lowercase hex without 0x prefix (matches on-chain _toLowercaseHex)
+	const normalizeAddr = (addr: string) => addr.replace(/^0x/i, '').toLowerCase()
+
+	const normalized = {
+		amount:  metadata.amount,
+		asset:   normalizeAddr(metadata.asset),
+		network: metadata.network,
+		payTo:   normalizeAddr(metadata.payTo),
+		url:     metadata.url,
+	}
+
+	const dataString = JSON.stringify(normalized, Object.keys(normalized).sort() as any)
+	const hashBytes = keccak256(new TextEncoder().encode(dataString))
+	return hashBytes
 }
 
 // ---------------------------------------------------------------------------
 // Log trigger handler
 // ---------------------------------------------------------------------------
 
-const onLogTrigger = (runtime: Runtime<Config>, payload: EVMLog): string => {
+const onLogTrigger = async (runtime: Runtime<Config>, payload: EVMLog): Promise<string> => {
 	runtime.log('ChallengeOpened event received')
 
 	const { topics, data } = payload
@@ -76,9 +87,10 @@ const onLogTrigger = (runtime: Runtime<Config>, payload: EVMLog): string => {
 	//   event ChallengeOpened(
 	//       uint256 indexed id,           // topics[1]
 	//       bytes32 indexed endpointId,   // topics[2]
-	//       string  path,                 // data (ABI-encoded)
-	//       string  method,               // data
-	//       bytes32 integrityHash         // data
+	//       address revenueSplitter,       // data (ABI-encoded)
+	//       string  path,                  // data
+	//       string  method,                // data
+	//       bytes32 integrityHash          // data
 	//   )
 	if (topics.length < 3) {
 		throw new Error(`Expected >=3 topics, got ${topics.length}`)
@@ -90,15 +102,26 @@ const onLogTrigger = (runtime: Runtime<Config>, payload: EVMLog): string => {
 
 	runtime.log(`challengeId=${challengeIdDecimal}`)
 
-	// Decode non-indexed parameters: (string path, string method, bytes32 integrityHash)
-	const [path, method, integrityHash] = decodeAbiParameters(
-		[{ type: 'string' }, { type: 'string' }, { type: 'bytes32' }],
+	// Decode non-indexed parameters: (address revenueSplitter, string path, string method, bytes32 integrityHash)
+	const [revenueSplitter, path, method, integrityHash] = decodeAbiParameters(
+		[{ type: 'address' }, { type: 'string' }, { type: 'string' }, { type: 'bytes32' }],
 		bytesToHex(data),
-	) as [string, string, `0x${string}`]
+	) as [`0x${string}`, string, string, `0x${string}`]
 
 	runtime.log(`path=${path}  method=${method}  integrityHash=${integrityHash}`)
 
 	const config = runtime.config
+
+	// Extract endpointId from topics[2]
+	const endpointIdHex = bytesToHex(topics[2])
+	runtime.log(`endpointId=${endpointIdHex}`)
+
+	// -------------------------------------------------------------------------
+	// Extract revenueSplitter from event data (avoid extra RPC calls)
+	// -------------------------------------------------------------------------
+
+	const expectedPayTo = revenueSplitter.toLowerCase()
+	runtime.log(`expectedPayTo=${expectedPayTo}`)
 
 	// -------------------------------------------------------------------------
 	// Each DON node independently fetches the endpoint and verifies the hash.
@@ -152,16 +175,22 @@ const onLogTrigger = (runtime: Runtime<Config>, payload: EVMLog): string => {
 					return { challengeId: req.challengeId, result: '0' }
 				}
 
-				const entry = accepts[0]
-				const metadata = {
-					amount:  String(entry.amount  ?? ''),
-					asset:   String(entry.asset   ?? ''),
-					network: String(entry.network ?? ''),
-					payTo:   String(entry.payTo   ?? '').toLowerCase(),
-					url:     String(paymentData.resource?.url ?? ''),
-				}
+			const entry = accepts[0]
+			const metadata = {
+				amount:  String(entry.amount  ?? ''),
+				asset:   String(entry.asset   ?? '').toLowerCase(),
+				network: String(entry.network ?? ''),
+				payTo:   String(entry.payTo   ?? '').toLowerCase(),
+				url:     String(paymentData.resource?.url ?? ''),
+			}
 
 				runtime.log(`metadata=${JSON.stringify(metadata)}`)
+
+				// Validate payTo matches the registered revenueSplitter
+				if (expectedPayTo && metadata.payTo !== expectedPayTo) {
+					runtime.log(`payTo mismatch: server=${metadata.payTo} expected=${expectedPayTo}`)
+					return { challengeId: req.challengeId, result: '0' }
+				}
 
 				const computed = computeIntegrityHash(metadata)
 
